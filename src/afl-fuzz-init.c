@@ -2475,13 +2475,13 @@ void check_crash_handling(void) {
 
     SAYF("\n" cLRD "[-] " cRST
          "Your system is configured to send core dump notifications to an\n"
-         "    external utility. This will cause issues: there will be an "
-         "extended delay\n"
-         "    between stumbling upon a crash and having this information "
-         "relayed to the\n"
-         "    fuzzer via the standard waitpid() API.\n"
+        "    external utility. This will cause issues: there will be an "
+        "extended delay\n"
+        "    between stumbling upon a crash and having this information "
+        "relayed to the\n"
+        "    fuzzer via the standard waitpid() API.\n"
          "    If you're just experimenting, set "
-         "'AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1'.\n\n"
+        "'AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1'.\n\n"
 
          "    To avoid having crashes misinterpreted as timeouts, please \n"
          "    temporarily modify /proc/sys/kernel/core_pattern, like so:\n\n"
@@ -2872,6 +2872,28 @@ void setup_testcase_shmem(afl_state_t *afl) {
   afl->fsrv.support_shmem_fuzz = 1;
   afl->fsrv.shmem_fuzz_len = (u32 *)map;
   afl->fsrv.shmem_fuzz = map + sizeof(u32);
+}
+
+
+//Function that only checks if the file exists and is a .cfg file, which is required by VP_mode (-v)
+void check_vp_config(afl_state_t *afl, u8 *fname){
+
+  if (unlikely(!fname)) { FATAL("BUG: Binary name is NULL"); }
+
+  struct stat st;
+
+  // Check if the file exists
+  if (stat(fname, &st) != 0) {
+      FATAL("File '%s' does not exist!",fname);
+      return;
+  }
+
+  // Check if the file has a .cfg extension
+  const char *extension = strrchr(fname, '.');
+  if (!extension || strcmp(extension, ".cfg") != 0) {
+      FATAL("File '%s' does not have a .cfg extension, which is required in VP_mode (-v)" ,fname);
+      return;
+  }
 
 }
 
@@ -2979,7 +3001,7 @@ void check_binary(afl_state_t *afl, u8 *fname) {
 
   }
 
-  if (afl->afl_env.afl_skip_bin_check || afl->use_wine || afl->unicorn_mode ||
+  if (afl->afl_env.afl_skip_bin_check || afl->use_wine || afl->unicorn_mode || afl->fsrv.vp_mode ||
       (afl->fsrv.qemu_mode && getenv("AFL_QEMU_CUSTOM_BIN")) ||
       (afl->fsrv.cs_mode && getenv("AFL_CS_CUSTOM_BIN")) ||
       afl->non_instrumented_mode) {
@@ -3057,7 +3079,7 @@ void check_binary(afl_state_t *afl, u8 *fname) {
 
 #endif                                                       /* ^!__APPLE__ */
 
-  if (!afl->fsrv.qemu_mode && !afl->fsrv.frida_mode && !afl->unicorn_mode &&
+  if (!afl->fsrv.qemu_mode && !afl->fsrv.vp_mode && !afl->fsrv.frida_mode && !afl->unicorn_mode &&
 #ifdef __linux__
       !afl->fsrv.nyx_mode &&
 #endif
@@ -3092,7 +3114,7 @@ void check_binary(afl_state_t *afl, u8 *fname) {
 
   }
 
-  if ((afl->fsrv.cs_mode || afl->fsrv.qemu_mode || afl->fsrv.frida_mode) &&
+  if ((afl->fsrv.cs_mode || afl->fsrv.qemu_mode || afl->fsrv.vp_mode || afl->fsrv.frida_mode) &&
       afl_memmem(f_data, f_len, SHM_ENV_VAR, strlen(SHM_ENV_VAR) + 1)) {
 
     SAYF("\n" cLRD "[-] " cRST

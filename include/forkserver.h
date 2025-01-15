@@ -145,6 +145,8 @@ typedef struct afl_forkserver {
 
   bool qemu_mode;                       /* if running in qemu mode or not   */
 
+  bool vp_mode;                       /* if running in vp mode or not  */
+
   bool frida_mode;                     /* if running in frida mode or not   */
 
   bool frida_asan;                    /* if running with asan in frida mode */

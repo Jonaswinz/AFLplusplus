@@ -217,6 +217,7 @@ static void usage(u8 *argv0, int more_help) {
       "  -O            - use binary-only instrumentation (FRIDA mode)\n"
 #if defined(__linux__)
       "  -Q            - use binary-only instrumentation (QEMU mode)\n"
+      "  -v            - use binary-only instrumentation (VP mode)\n"
       "  -U            - use unicorn-based instrumentation (Unicorn mode)\n"
       "  -W            - use qemu-based instrumentation with Wine (Wine mode)\n"
 #endif
@@ -605,10 +606,10 @@ int main(int argc, char **argv_orig, char **envp) {
 
   afl->shmem_testcase_mode = 1;  // we always try to perform shmem fuzzing
 
-  // still available: HjJkKqruvwz
+  // still available: HjJkKqruwz
   while ((opt = getopt(argc, argv,
                        "+a:Ab:B:c:CdDe:E:f:F:g:G:hi:I:l:L:m:M:nNo:Op:P:QRs:S:t:"
-                       "T:uUV:WXx:YzZ")) > 0) {
+                       "T:uUV:WXx:YzZ:v")) > 0) {
 
     switch (opt) {
 
@@ -1191,6 +1192,13 @@ int main(int argc, char **argv_orig, char **envp) {
 
         break;
 
+      case 'v':                                             /* VP mode */    
+
+        afl->fsrv.vp_mode = 1;
+
+        if (!mem_limit_given) { afl->fsrv.mem_limit = MEM_LIMIT_QEMU; }
+        break;
+
       case 'N':                                             /* Unicorn mode */
 
         if (afl->no_unlink) { FATAL("Multiple -N options not supported"); }
@@ -1558,7 +1566,7 @@ int main(int argc, char **argv_orig, char **envp) {
   configure_afl_kill_signals(
       &afl->fsrv, afl->afl_env.afl_child_kill_signal,
       afl->afl_env.afl_fsrv_kill_signal,
-      (afl->fsrv.qemu_mode || afl->unicorn_mode || afl->fsrv.use_fauxsrv
+      (afl->fsrv.qemu_mode || afl->fsrv.vp_mode || afl->unicorn_mode || afl->fsrv.use_fauxsrv
   #ifdef __linux__
        || afl->fsrv.nyx_mode
   #endif
@@ -1643,6 +1651,7 @@ int main(int argc, char **argv_orig, char **envp) {
     if (afl->crash_mode) { FATAL("-C and -n are mutually exclusive"); }
     if (afl->fsrv.frida_mode) { FATAL("-O and -n are mutually exclusive"); }
     if (afl->fsrv.qemu_mode) { FATAL("-Q and -n are mutually exclusive"); }
+    if (afl->fsrv.vp_mode) { FATAL("-v and -n are mutually exclusive"); }
     if (afl->fsrv.cs_mode) { FATAL("-A and -n are mutually exclusive"); }
     if (afl->unicorn_mode) { FATAL("-U and -n are mutually exclusive"); }
 
@@ -2218,7 +2227,13 @@ int main(int argc, char **argv_orig, char **envp) {
   }
 
   setup_cmdline_file(afl, argv + optind);
-  check_binary(afl, argv[optind]);
+
+  //If in vp mode the target is not actually a binary, but rather a .cfg file.
+  if(afl->fsrv.vp_mode){
+      check_vp_config(afl, argv[optind]);
+  }else{
+      check_binary(afl, argv[optind]);
+  }
 
   u64 prev_target_hash = 0;
   s32 fast_resume = 0;
@@ -2454,13 +2469,17 @@ int main(int argc, char **argv_orig, char **envp) {
     use_argv = get_cs_argv(argv[0], &afl->fsrv.target_path, argc - optind,
                            argv + optind);
 
+  } else if (afl->fsrv.vp_mode) {
+
+    afl->fsrv.target_path = alloc_printf("%s", getenv("TC_PATH"));
+
   } else {
 
     use_argv = argv + optind;
 
   }
 
-  if (afl->non_instrumented_mode || afl->fsrv.qemu_mode ||
+  if (afl->non_instrumented_mode || afl->fsrv.qemu_mode || afl->fsrv.vp_mode ||
       afl->fsrv.frida_mode || afl->fsrv.cs_mode || afl->unicorn_mode) {
 
     u32 old_map_size = map_size;
@@ -2493,7 +2512,28 @@ int main(int argc, char **argv_orig, char **envp) {
   afl->fsrv.trace_bits =
       afl_shm_init(&afl->shm, afl->fsrv.map_size, afl->non_instrumented_mode);
 
-  if (!afl->non_instrumented_mode && !afl->fsrv.qemu_mode &&
+  if (afl->fsrv.vp_mode) {
+
+    //The first argument must be the filename of the executable or emtpy string.
+    char **vp_argv = ck_alloc(sizeof(char *) * 6);
+    vp_argv[0]=""; // harness
+
+    vp_argv[1] = ck_alloc(100);
+    strcpy(vp_argv[1], argv[optind]);
+
+    vp_argv[2] = ck_alloc(50);
+    sprintf(vp_argv[2], "%d", (afl->shm_fuzz->shm_id)); // test case
+    vp_argv[3] = ck_alloc(50);
+    sprintf(vp_argv[3], "%d", (afl->shm.shm_id)); // coverage
+    vp_argv[4] = ck_alloc(50);
+    sprintf(vp_argv[4], "%d", FORKSRV_FD); // test case
+    vp_argv[5] = ck_alloc(50);
+    sprintf(vp_argv[5], "%d", (FORKSRV_FD)+1); // test case
+    
+    afl->argv = vp_argv;
+  }
+
+  if (!afl->non_instrumented_mode && !afl->fsrv.qemu_mode && !afl->fsrv.vp_mode &&
       !afl->unicorn_mode && !afl->fsrv.frida_mode && !afl->fsrv.cs_mode &&
       !afl->afl_env.afl_skip_bin_check) {
 
@@ -2962,57 +3002,57 @@ int main(int argc, char **argv_orig, char **envp) {
                       3600 */
                    )) {
 
-        ++afl->cycles_wo_finds;
+          ++afl->cycles_wo_finds;
 
-        if (unlikely(afl->shm.cmplog_mode &&
-                     afl->cmplog_max_filesize < MAX_FILE)) {
+          if (unlikely(afl->shm.cmplog_mode &&
+                       afl->cmplog_max_filesize < MAX_FILE)) {
 
-          afl->cmplog_max_filesize <<= 4;
+            afl->cmplog_max_filesize <<= 4;
 
-        }
+          }
 
-        switch (afl->expand_havoc) {
+          switch (afl->expand_havoc) {
 
-          case 0:
-            // this adds extra splicing mutation options to havoc mode
-            afl->expand_havoc = 1;
-            break;
-          case 1:
+            case 0:
+              // this adds extra splicing mutation options to havoc mode
+              afl->expand_havoc = 1;
+              break;
+            case 1:
             // if we did not use splicing (default) then activate it
             afl->use_splicing = 1;
 
-            // add MOpt mutator
-            /*
-            if (afl->limit_time_sig == 0 && !afl->custom_only &&
-                !afl->python_only) {
+              // add MOpt mutator
+              /*
+              if (afl->limit_time_sig == 0 && !afl->custom_only &&
+                  !afl->python_only) {
 
-              afl->limit_time_sig = -1;
-              afl->limit_time_puppet = 0;
+                afl->limit_time_sig = -1;
+                afl->limit_time_puppet = 0;
 
-            }
+              }
 
-            */
-            afl->expand_havoc = 2;
-            if (afl->cmplog_lvl && afl->cmplog_lvl < 2) afl->cmplog_lvl = 2;
-            break;
-          case 2:
-            // increase havoc mutations per fuzz attempt
-            afl->havoc_stack_pow2++;
-            afl->expand_havoc = 3;
-            break;
-          case 3:
-            // further increase havoc mutations per fuzz attempt
-            afl->havoc_stack_pow2++;
-            afl->expand_havoc = 4;
-            break;
-          case 4:
-            afl->expand_havoc = 5;
-            // if (afl->cmplog_lvl && afl->cmplog_lvl < 3) afl->cmplog_lvl =
-            // 3;
-            break;
-          case 5:
-            // nothing else currently
-            break;
+              */
+              afl->expand_havoc = 2;
+              if (afl->cmplog_lvl && afl->cmplog_lvl < 2) afl->cmplog_lvl = 2;
+              break;
+            case 2:
+              // increase havoc mutations per fuzz attempt
+              afl->havoc_stack_pow2++;
+              afl->expand_havoc = 3;
+              break;
+            case 3:
+              // further increase havoc mutations per fuzz attempt
+              afl->havoc_stack_pow2++;
+              afl->expand_havoc = 4;
+              break;
+            case 4:
+              afl->expand_havoc = 5;
+              // if (afl->cmplog_lvl && afl->cmplog_lvl < 3) afl->cmplog_lvl =
+              // 3;
+              break;
+            case 5:
+              // nothing else currently
+              break;
 
         }
 
