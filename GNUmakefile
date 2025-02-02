@@ -380,7 +380,7 @@ help:
 	@echo "HELP --- the following make targets exist:"
 	@echo "=========================================="
 	@echo "all: the main AFL++ binaries and llvm/gcc instrumentation"
-	@echo "binary-only: everything for binary-only fuzzing: frida_mode, nyx_mode, qemu_mode, frida_mode, unicorn_mode, coresight_mode, libdislocator, libtokencap"
+	@echo "binary-only: everything for binary-only fuzzing: frida_mode, nyx_mode, qemu_mode, vp_mode, frida_mode, unicorn_mode, coresight_mode, libdislocator, libtokencap"
 	@echo "source-only: everything for source code fuzzing: nyx_mode, libdislocator, libtokencap"
 	@echo "distrib: everything (for both binary-only and source code fuzzing)"
 	@echo "man: creates simple man pages from the help option of the programs"
@@ -626,6 +626,7 @@ clean:
 	-$(MAKE) -C qemu_mode/libcompcov clean
 	-$(MAKE) -C qemu_mode/libqasan clean
 	-$(MAKE) -C frida_mode clean
+	-$(MAKE) -C vp_mode clean
 	rm -rf nyx_mode/packer/linux_initramfs/init.cpio.gz nyx_mode/libnyx/libnyx/target/release/* nyx_mode/QEMU-Nyx/x86_64-softmmu/qemu-system-x86_64
 ifeq "$(IN_REPO)" "1"
 	-test -e coresight_mode/coresight-trace/Makefile && $(MAKE) -C coresight_mode/coresight-trace clean || true
@@ -686,6 +687,7 @@ endif
 	-cd unicorn_mode && unset CFLAGS && sh ./build_unicorn_support.sh
   endif
 endif
+	-$(MAKE) -C vp_mode
 
 .PHONY: binary-only
 binary-only: test_shm test_python ready $(PROGS)
@@ -718,6 +720,7 @@ endif
 	-cd unicorn_mode && unset CFLAGS && sh ./build_unicorn_support.sh
   endif
 endif
+	-$(MAKE) -C vp_mode
 	@echo
 	@echo
 	@echo Build Summary:
@@ -742,6 +745,7 @@ endif
 	@test -e unicorn_mode/unicornafl/build_python/libunicornafl.so && echo "[+] unicorn_mode successfully built" || echo "[-] unicorn_mode could not be built, it is optional, see unicorn_mode/README.md for what is needed"
   endif
 endif
+	@test -e vp_mode/avp64/build/avp64-runner -a -e vp_mode/harness/build/test_client -a -e vp_mode/avp64/build/ocx-qemu-arm/libocx-qemu-arm.so && echo "[+] vp_mode successfully built" || echo "[-] vp_mode could not be built, it is optional, see vp_mode/README.md for what is needed"
 	@echo
 
 .PHONY: source-only
