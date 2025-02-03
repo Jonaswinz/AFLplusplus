@@ -687,7 +687,9 @@ endif
 	-cd unicorn_mode && unset CFLAGS && sh ./build_unicorn_support.sh
   endif
 endif
-	-$(MAKE) -C vp_mode
+	ifndef NO_VPMODE
+		-cd vp_mode && ./build_vp_support.sh
+	endif
 
 .PHONY: binary-only
 binary-only: test_shm test_python ready $(PROGS)
@@ -720,7 +722,9 @@ endif
 	-cd unicorn_mode && unset CFLAGS && sh ./build_unicorn_support.sh
   endif
 endif
-	-$(MAKE) -C vp_mode
+	ifndef NO_VPMODE
+		-cd vp_mode && ./build_vp_support.sh
+	endif
 	@echo
 	@echo
 	@echo Build Summary:

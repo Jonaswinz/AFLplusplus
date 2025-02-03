@@ -114,3 +114,5 @@ utils/plot_ui/afl-plot-ui
 vuln_prog
 argv_fuzz_demo
 argv_fuzz_persistent_demo
+vp_mode/avp64
+vp_mode/harness/build
