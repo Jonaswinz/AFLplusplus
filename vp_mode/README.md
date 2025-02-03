@@ -8,36 +8,45 @@ When running `make distrib` or `make binary-only` the vp-mode will be built unle
 
 ## 3) How to use VP mode
 There a some settings that need to be set, before running the harness (test_client). Because of $(pwd), these commands need to be executed from the AFLplusplus directory.
+
+### Required settings
 ```
+# Path to harness
 export TC_PATH="$(pwd)/vp_mode/harness/build/test_client"
-export TC_VP_EXECUTABLE=$(pwd)/vp_mode/avp64/build/avp64-runner
+# Path vp
+export TC_VP_EXECUTABLE="$(pwd)/vp_mode/avp64/install/bin/avp64-runner"
+# Launch arguments of vp
 export TC_VP_LAUNCH_ARGS="--enable-test-receiver --test-receiver-interface 1 --test-receiver-pipe-request 10 --test-receiver-pipe-response 11 -f"
-# 0:no logging, 1:everything, 2:errors only
+# Add required libraries
+export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$(pwd)/vp_mode/avp64/install/lib/:$(pwd)/vp_mode/avp64/install/lib64/"
+```
+
+### Optional settings
+```
+# 0: No logging (default), 1: Everything, 2: Errors only
 export TC_LOGGING="2"
 export TC_LOGGING_PATH="tc_out.txt"
-# 0:no logging, 1:everything, 2:errors only
+# 0: No logging (default), 1: Everything, 2: Errors only
 export TC_VP_LOGGING="2"
 export TC_VP_LOGGING_PATH="vp_out.txt"
-# 0:not killing, 1:killing old instances
+# 0: Not killing (default), 1: Killing old instances
 export TC_KILL_OLD="1"
-# 0:not restarting, 1:restarting
+# 0: Not restarting (default), 1: Restarting
 export TC_VP_RESTART="0"
 
-#Mode
-#TC_MODE (0: Run between symbols, 1: Snapshot to symbol)
+# Mode
+# 0: Run between symbols (default), 1: Snapshot to symbol
 export TC_MODE="0"
-#TC_START_SYMBOL Required for TC_MODE=0,1
+# Start symbol for on run. Required for TC_MODE=0,1
 export TC_START_SYMBOL="main"
-#TC_START_SYMBOL Required for TC_MODE=0
+# End symbol for a run. Required for TC_MODE=0
 export TC_END_SYMBOL="exit"
-#TC_SNAPSHOT_PATH Required for TC_MODE=1
+# Path to the snapshot files, that should be loaded. Required for TC_MODE=1
 export TC_SNAPSHOT_PATH="/target/snapshot"
-
-#Additional ENV
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/vp_mode/avp64/build/ocx-qemu-arm/"
 ```
 
-After this the vp-mode can be started with the `-v` option, for example like this:
+Optionally the `settings.bash` inside the harness directory can be modified and executed. After this the vp-mode can be started with the `-v` option, for example like this:
+
 ```
 afl-fuzz -i <seeds folder> -o <out folder> -m none -v -- <path to target.cfg>
 ```
@@ -65,12 +74,8 @@ A Visual Studio Code launch.json configuration (paste inside "configurations": [
     "cwd": "${workspaceFolder}",
     "environment": [
     {
-        "name": "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES",
-        "value": "1"
-    },
-    {
         "name": "LD_LIBRARY_PATH",
-        "value": "$LD_LIBRARY_PATH:vp_mode/avp64/build/ocx-qemu-arm/:/net/sw/gcc/gcc-11.4.1/lib64"
+        "value": "$LD_LIBRARY_PATH:${workspaceFolder}/vp_mode/avp64/install/lib:${workspaceFolder}/vp_mode/avp64/install/lib64:/net/sw/gcc/gcc-11.4.1/lib64"
     },
     {
         "name": "AFL_SKIP_CPUFREQ",
@@ -82,7 +87,7 @@ A Visual Studio Code launch.json configuration (paste inside "configurations": [
     },
     {
         "name": "TC_VP_EXECUTABLE",
-        "value": "vp_mode/avp64/build/avp64-runner"
+        "value": "vp_mode/avp64/install/bin/avp64-runner"
     },
     {
         "name": "TC_VP_LAUNCH_ARGS",
