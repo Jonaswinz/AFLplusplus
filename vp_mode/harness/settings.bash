@@ -21,14 +21,15 @@ export TC_KILL_OLD="1"
 export TC_VP_RESTART="0"
 
 # Mode
-# 0: Run between symbols (default), 1: Snapshot to symbol
+# 0: Restart after each run, 1: Persistent mode
 export TC_MODE="0"
-# Start symbol for on run. Required for TC_MODE=0,1
+# Number of the VP process instances used. Required for TC_MODE=0.
+export TC_VP_INSTANCES="0"
+# Fuzzing Settings
 export TC_START_SYMBOL="main"
-# End symbol for a run. Required for TC_MODE=0
 export TC_END_SYMBOL="exit"
-# Path to the snapshot files, that should be loaded. Required for TC_MODE=1
-export TC_SNAPSHOT_PATH="/target/snapshot"
+export TC_RETURN_REGISTER="x0"
+export TC_MMIO_DATA_ADDRESS="0x10009518"
 
 ## Additional for AFLplusplus
 export AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES="1"
@@ -36,4 +37,5 @@ export AFL_SKIP_CPUFREQ="1"
 
 #Additional for setup
 export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/net/sw/gcc/gcc-11.4.1/lib64"
-
+export AFL_SKIP_CPUFREQ=1
+export AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1

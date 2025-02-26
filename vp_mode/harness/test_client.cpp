@@ -16,8 +16,13 @@
 #include <sstream>
 #include <ctime>
 #include <vector>
+#include <future>
+#include <mutex>
 
+// Import vp-testing-interface client.
+#include "testing_client.h"
 
+// Import profiler if used (can be set here or with INCLUDE_VP_HARNESS_PROFILER option).
 #ifdef PROFILER_ENABLED
     #include <easy/profiler.h>
 #else
@@ -28,716 +33,607 @@
 #endif
 
 // Settings
-#define PROFILING_COUNT 5
+#define PROFILING_COUNT 15
 #define AFL_MODE
 #define OWN_NAME "test_client"
+#define MAX_VP_INSTANCES 20
 // End Settings
 
-#define REQUEST_LENGTH 256
-#define RESPONSE_LENGTH 256
-
-#define REQUEST_READ_FD 10
-#define RESPONSE_WRITE_FD 11
-
-#define MAP_SIZE_POW2 16
-#define MAP_SIZE (1 << MAP_SIZE_POW2)
-
+// Data to enable shared memory fuzzing for AFLplusplus
 #define FS_OPT_ENABLED 0x80000001
 #define FS_OPT_SHDMEM_FUZZ 0x01000000
 
-#define LOG_MESSAGE(type, format, ...) Logger::log(type, format, ##__VA_ARGS__)
+// Logging macro
+#define LOG_MESSAGE(type, format, ...) logger::log(type, format, ##__VA_ARGS__)
 
-class Logger {
-public:
+// Custom logger to log into a file
+class logger {
 
-    enum LogLevel{
-        DISABLED, ALL, WARNINGS_AND_ERRORS
-    };
+    public:
 
-    enum LogType{
-        INFO, WARNING, ERROR
-    };
+        enum log_level{
+            DISABLED, ALL, WARNINGS_AND_ERRORS
+        };
 
-    static std::ofstream fileStream;
-    static LogLevel logLevel;
+        enum log_type{
+            INFO, WARNING, ERROR
+        };
 
-    // Initialize the logger with a filename
-    static void init(const std::string& filename, LogLevel setLogLevel) {
-        fileStream.open(filename, std::ios::app); // Open for appending
-        if (!fileStream.is_open()) {
-            throw std::runtime_error("Unable to open log file: " + filename);
-        }
-        logLevel = setLogLevel;
-    }
+        static std::ofstream file_stream;
+        static log_level selected_log_level;
 
-    // Log a message
-    static void log(LogType logType, const std::string& format, ...) {
-        if (logLevel == DISABLED || (logLevel == WARNINGS_AND_ERRORS && (logType != WARNING && logType != ERROR))) return;
-        if (fileStream.is_open()) {
+        // Mutex to synchonize logging when multiple threads are logging to the same file.
+        static std::mutex logger_mutex;
 
-            // Get current time
-            char timeBuffer[20]; // Buffer for timestamp [YYYY-MM-DD HH:MM:SS]
-            std::time_t current_time = std::time(nullptr);
-            std::strftime(timeBuffer, sizeof(timeBuffer), "%Y-%m-%d %H:%M:%S", std::localtime(&current_time));
-
-            char messageBuffer[1024]; // Buffer for formatted message
-
-            std::string logTypeString;
-
-            switch(logType){
-                case INFO:
-                    logTypeString = "INFO: ";
-                break;
-                case WARNING:
-                    logTypeString = "WARNING: ";
-                break;
-                case ERROR:
-                    logTypeString = "ERROR: ";
-                break;
+        // Initialize the logger with a filename
+        static void init(const std::string& filename, log_level set_log_level) {
+            file_stream.open(filename, std::ios::app); // Open for appending
+            if (!file_stream.is_open()) {
+                throw std::runtime_error("Unable to open log file: " + filename);
             }
+            selected_log_level = set_log_level;
+        }
 
-            // Format the message
+        // Log a message
+        static void log(log_type msg_log_type, const std::string& format, ...){
             va_list args;
             va_start(args, format);
-            std::vsnprintf(messageBuffer, sizeof(messageBuffer), format.c_str(), args);
+            log(msg_log_type, format, args);
             va_end(args);
-
-            // Output the timestamp and message to the file
-            fileStream << "[" << timeBuffer << "] " << logTypeString << messageBuffer << std::endl;
-
-        } else {
-            std::cerr << "Log file is not open." << std::endl;
         }
-    }
 
-    // Clean up the logger
-    static void close() {
-        if (fileStream.is_open()) {
-            fileStream.close();
+        // Log a message
+        static void log(log_type msg_log_type, const std::string& format, va_list args) {
+            if (selected_log_level == DISABLED || (selected_log_level == WARNINGS_AND_ERRORS && (msg_log_type != WARNING && msg_log_type != ERROR))) return;
+            if (file_stream.is_open()) {
+
+                // Get current time
+                char time_buffer[20]; // Buffer for timestamp [YYYY-MM-DD HH:MM:SS]
+                std::time_t current_time = std::time(nullptr);
+                std::strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d %H:%M:%S", std::localtime(&current_time));
+
+                char messageBuffer[1024]; // Buffer for formatted message
+
+                std::string log_type_string;
+
+                switch(msg_log_type){
+                    case INFO:
+                        log_type_string = "INFO: ";
+                    break;
+                    case WARNING:
+                        log_type_string = "WARNING: ";
+                    break;
+                    case ERROR:
+                        log_type_string = "ERROR: ";
+                    break;
+                }
+
+                // Format the message
+                std::vsnprintf(messageBuffer, sizeof(messageBuffer), format.c_str(), args);
+
+                // Output the timestamp and message to the file
+                std::unique_lock<std::mutex> lock(logger_mutex);
+                file_stream << "[" << time_buffer << "] " << log_type_string << messageBuffer << std::endl;
+                lock.unlock();
+
+            } else {
+                std::cerr << "Log file is not open." << std::endl;
+            }
         }
-    }
 
+        static void log_error(const char* fmt, ...) {
+            va_list args;
+            va_start(args, fmt);
+            log(log_type::ERROR, fmt, args);
+            va_end(args);
+        }
+
+        static void log_info(const char* fmt, ...) {
+            va_list args;
+            va_start(args, fmt);
+            log(log_type::INFO, fmt, args);
+            va_end(args);
+        }
+
+        // Clean up the logger
+        static void close() {
+            if (file_stream.is_open()) {
+                file_stream.close();
+            }
+        }
 };
 
-std::ofstream Logger::fileStream;
-Logger::LogLevel Logger::logLevel = Logger::DISABLED;
+// Static variables of the logger
+std::ofstream logger::file_stream;
+logger::log_level logger::selected_log_level = logger::DISABLED;
+std::mutex logger::logger_mutex;
 
-enum Command{
-    CONTINUE, KILL, SET_BREAKPOINT, REMOVE_BREAKPOINT, SET_MMIO_TRACKING, DISABLE_MMIO_TRACKING, SET_MMIO_VALUE, SET_CODE_COVERAGE, REMOVE_CODE_COVERAGE, GET_CODE_COVERAGE, GET_EXIT_STATUS, RESET_CODE_COVERAGE, DO_RUN, WRITE_CODE_COVERAGE
-};
-
-enum Status {
-    STATUS_OK, MMIO_READ, MMIO_WRITE, VP_END, BREAKPOINT_HIT, ERROR=-1
-};
-
-struct Request{
-    Command command;
-    char data[REQUEST_LENGTH-1];
-    size_t dataLength = 0;
-};
-
-struct Response{
-    char data[RESPONSE_LENGTH];
-    size_t dataLength = 0;
-};
-
-class VPClient{
+// Client that interfaces with a the virtual platform process.
+class vp_client{
 
     public:
 
-        int bb_list_size = 0;
-        char bb_list [MAP_SIZE];
-        int fd_request[2], fd_response[2];
+        // States of the vp process.
+        enum process_state{
+            NOT_EXISTING, STARTING, STARTED, READY, DONE, KILLING, KILLED
+        };
 
-        VPClient(){
+        // Testing client from the vp-testing-interface for the current process
+        testing::pipe_testing_client* vp_pipe_client;
 
-            if (pipe(fd_request) == -1 || pipe(fd_response) == -1) {
-                LOG_MESSAGE(Logger::ERROR, "Error creating new pipes!");
-                exit(1);
-            }
+        // TODO getter and setter.
+        // State of the vp process that this client is communicating with.
+        process_state vp_process_state = NOT_EXISTING;
 
-            LOG_MESSAGE(Logger::INFO, "Created communication pipes. Request FD: %d,%d and resonse FD: %d,%d", fd_request[0], fd_request[1], fd_response[0], fd_response[1]);
+        // TODO getter.
+        // PID of the VP child process.
+        pid_t vp_process = -1;
 
-            if(dup2(fd_request[0], REQUEST_READ_FD)  == -1 || dup2(fd_response[1], RESPONSE_WRITE_FD) == -1){
-                LOG_MESSAGE(Logger::ERROR, "Error setting file descriptor of request read to %d and response write to %d pipes.", REQUEST_READ_FD, RESPONSE_WRITE_FD);
-                exit(1);
-            }
+        vp_client(std::string vp_executable, int vp_loglevel, std::string vp_logging_path, std::string vp_launch_args, std::string target_path, uint64_t mmio_start_address, uint64_t mmio_end_address){
 
-            LOG_MESSAGE(Logger::INFO, "Setting pipe file descriptor of request read to %d and response write to %d.", REQUEST_READ_FD, RESPONSE_WRITE_FD);
+            // Copy values to local variables.
+            m_mmio_start_address = mmio_start_address;
+            m_mmio_end_address = mmio_end_address;
 
-            //TODO close pipes etc.
+            m_vp_executable = vp_executable;
+            m_vp_loglevel = vp_loglevel;
+            m_vp_logging_path = vp_logging_path;
+            m_vp_launch_args = vp_launch_args;
+            m_target_path = target_path;
+
+            // Init a pipe client without specific file descriptors.
+            vp_pipe_client = new testing::pipe_testing_client();
+
+            // Callback for info and error logging. This enables the testing_client to also write into the logging file.
+            vp_pipe_client->log_error_message = logger::log_error;
+            vp_pipe_client->log_info_message = logger::log_info;
+
+            // Start the communication.
+            vp_pipe_client->start();
             
         };
 
-        void waitingForReady() {
-            EASY_FUNCTION(profiler::colors::Red);
-            EASY_BLOCK("Waiting for VP ready message");
-                LOG_MESSAGE(Logger::INFO, "Waiting for ready message.");
+        // Starting the VP in a new process.
+        bool start_process(){
+            EASY_FUNCTION(profiler::colors::Yellow);
 
-                char* buffer = new char[RESPONSE_LENGTH];
-                unsigned int priority;
-
-                while (true) {
-                    ssize_t bytes_read = read(fd_response[0], buffer, RESPONSE_LENGTH);
-
-                    if (bytes_read == -1) {
-                        LOG_MESSAGE(Logger::ERROR, "ERROR: An error occurred while waiting for ready message: %s", strerror(errno));
-                        break;
-                    }
-
-                    buffer[bytes_read] = '\0'; // Ensure null-termination for valid C-string
-                    std::string message(buffer);
-                    if (message == "ready") {
-                        LOG_MESSAGE(Logger::INFO, "Received ready message!");
-                        break;
-                    }
-                }
-
-                delete[] buffer;
-            EASY_END_BLOCK
-        }
-
-        bool sendRequest(Request* request, Response* response) {
-
-            size_t send_length = request->dataLength+1;
-
-            if (write(fd_request[1], &send_length, sizeof(send_length)) == -1) {
-                LOG_MESSAGE(Logger::ERROR, "Error sending message length %s", strerror(errno));
+            if(vp_process_state != NOT_EXISTING && vp_process != -1){
+                LOG_MESSAGE(logger::ERROR, "Cannot start a VP process, because there is currently one running for this vp client: %d in state %d.", vp_process, (int)vp_process_state);  
                 return false;
             }
 
-            if (write(fd_request[1], &request->command, sizeof(request->command)) == -1) {
-                LOG_MESSAGE(Logger::ERROR, "Error sending message command %s", strerror(errno));
-                return false;
-            }
-
-            if (write(fd_request[1], request->data, request->dataLength) == -1) {
-                LOG_MESSAGE(Logger::ERROR, "Error sending message data %s", strerror(errno));
-                return false;
-            }
-
-            LOG_MESSAGE(Logger::INFO, "SENT: %d", request->command);
-
-            ssize_t bytes_read = read(fd_response[0], &response->dataLength, sizeof(response->dataLength));
-            if (bytes_read != sizeof(response->dataLength)) {
-                LOG_MESSAGE(Logger::ERROR, "Error receiving response data length: %s", strerror(errno));
-                return false;
-            }
-
-            if(response->dataLength > 0){
-                bytes_read = read(fd_response[0], response->data, response->dataLength);
-                if (bytes_read == -1) {
-                    LOG_MESSAGE(Logger::ERROR, "Error receiving response data: %s", strerror(errno));
-                    return false;
-                }
-            }
-
-            return true;
-        }   
-
-        void setup(){
-            EASY_FUNCTION(profiler::colors::Magenta);
-        
-            LOG_MESSAGE(Logger::INFO, "Setting up..");
-
-            Request request = Request();
-            Response response = Response();
-
-            EASY_BLOCK("Enable code coverage tracking");
-                //Enable code coverage tracking.
-                request.command = SET_CODE_COVERAGE;
-                request.dataLength = 0;
-                sendRequest(&request, &response);
-            EASY_END_BLOCK
-
-            EASY_BLOCK("Enable MMIO tracking");
-                //Enable MMIO tracking.
-                request.command = SET_MMIO_TRACKING;
-                request.dataLength = 0;
-                sendRequest(&request, &response);
-            EASY_END_BLOCK
-
-            LOG_MESSAGE(Logger::INFO, "Setup done.");
-
-        }
-
-        void write_code_coverage(int shm_id, unsigned int offset){
-
-            LOG_MESSAGE(Logger::INFO, "Request to write code coverage to: %d.", shm_id);
-
-            EASY_BLOCK("Writing code coverage");
-
-                Request request = Request();
-                Response response = Response();
-
-                request.command = WRITE_CODE_COVERAGE;
-                request.data[0] = (char)(shm_id & 0xFF);
-                request.data[1] = (char)((shm_id >> 8) & 0xFF);
-                request.data[2] = (char)((shm_id >> 16) & 0xFF);
-                request.data[3] = (char)((shm_id >> 24) & 0xFF);
-                request.data[4] = (char)(offset & 0xFF);
-                request.data[5] = (char)((offset >> 8) & 0xFF);
-                request.data[6] = (char)((offset >> 16) & 0xFF);
-                request.data[7] = (char)((offset >> 24) & 0xFF);
-                request.dataLength = 8;
-
-                sendRequest(&request, &response);
-
-            EASY_END_BLOCK
-        }
-
-        void run_single(std::string start_breakpoint, std::string end_breakpoint, int shm_id, unsigned int offset){
-            EASY_FUNCTION(profiler::colors::Magenta);
+            vp_process_state = STARTING;
             
-            LOG_MESSAGE(Logger::INFO, "Requesting single run with start breakpoint %s to end breakpoint %s with MMIO data at %d.", start_breakpoint.c_str(), end_breakpoint.c_str(), shm_id);
-
-            Request request = Request();
-            Response response = Response();
-
-            EASY_BLOCK("Requesting single run");
-                request.command = DO_RUN;
-                request.data[0] = start_breakpoint.size();
-                strcpy(request.data+1, start_breakpoint.c_str());
-                request.data[1+start_breakpoint.size()] = end_breakpoint.size();
-                strcpy(request.data+2+start_breakpoint.size(), end_breakpoint.c_str());
-
-                request.data[2+start_breakpoint.size()+end_breakpoint.size()] = (char)(shm_id & 0xFF);
-                request.data[3+start_breakpoint.size()+end_breakpoint.size()] = (char)((shm_id >> 8) & 0xFF);
-                request.data[4+start_breakpoint.size()+end_breakpoint.size()] = (char)((shm_id >> 16) & 0xFF);
-                request.data[5+start_breakpoint.size()+end_breakpoint.size()] = (char)((shm_id >> 24) & 0xFF);
-
-                request.data[6+start_breakpoint.size()+end_breakpoint.size()] = (char)(offset & 0xFF);
-                request.data[7+start_breakpoint.size()+end_breakpoint.size()] = (char)((offset >> 8) & 0xFF);
-                request.data[8+start_breakpoint.size()+end_breakpoint.size()] = (char)((offset >> 16) & 0xFF);
-                request.data[9+start_breakpoint.size()+end_breakpoint.size()] = (char)((offset >> 24) & 0xFF);
-
-                request.dataLength = 10+start_breakpoint.size()+end_breakpoint.size();
-
-                sendRequest(&request, &response);
-            EASY_END_BLOCK
-
-            //TODO put in own function:
-            EASY_BLOCK("Getting exit value");
-                //Get exit status.
-                request.command = GET_EXIT_STATUS;
-                request.dataLength = 0;
-                sendRequest(&request, &response);
-                ret_value = response.data[0];
-                LOG_MESSAGE(Logger::INFO, "Run done. Exit code: %d", ret_value);
-            EASY_END_BLOCK
-
-            /*
-            EASY_BLOCK("Getting code coverage");
-                //Get code coverage.
-                achtung das muss noch geändert werden! also data 0 muss zu command
-                request.data[0] = GET_CODE_COVERAGE;
-                request.dataLength = 1;
-                sendRequest(&request, &response);
-                int converage_length = (response.data[0]) | (response.data[1] << 8) | (response.data[2] << 16) | (response.data[3] << 24);
-                LOG_MESSAGE(Logger::INFO, "Coverage length: %d", converage_length);
-
-                bb_list_size = converage_length;
-
-                int received_length = 0;
-                while(received_length < converage_length) {
-                    size_t next_chunk_size = std::min(RESPONSE_LENGTH, converage_length-received_length);
-                    ssize_t bytes_read = mq_receive(mqt_responses, bb_list+received_length, next_chunk_size, NULL);
-                    received_length += next_chunk_size;
-                }
-                LOG_MESSAGE(Logger::INFO, "Coverage received!");
-            EASY_END_BLOCK  
-            */
-        
-        }
-
-        void run(std::string MMIO_data, bool continueRun){
-            EASY_FUNCTION(profiler::colors::Magenta);
-            
-            LOG_MESSAGE(Logger::INFO, "Running ...");
-
-            size_t MMIO_data_index = 0;
-
-            Request request = Request();
-            Response response = Response();
-
-            //TODO set via env
-
-            EASY_BLOCK("Setting exit breakpoint");
-                //Set exit breakpoint.
-                request.command = SET_BREAKPOINT;
-                request.data[0] = 0;
-                strcpy(request.data+1, "exit");
-                request.dataLength = 5;
-                sendRequest(&request, &response);
-            EASY_END_BLOCK
-
-
-            while(true){
-
-                if(response.data[0] == VP_END){
-                    LOG_MESSAGE(Logger::INFO, "Received VP_END.");
-                    break;
-                }else if(response.data[0] == MMIO_READ){
-                    LOG_MESSAGE(Logger::INFO, "Received MMIO_READ.");
-
-                    if(MMIO_data_index < MMIO_data.size()+1){
-                        
-                        LOG_MESSAGE(Logger::INFO, "Sending: %c", MMIO_data.c_str()[MMIO_data_index]);
-
-                        EASY_BLOCK("Sending MMIO value");
-                            //Set MMIO character
-                            request.command = SET_MMIO_VALUE;
-                            request.data[0] = 1;
-                            request.data[1] = MMIO_data.c_str()[MMIO_data_index];
-                            request.dataLength = 2;
-                            sendRequest(&request, &response);
-                            MMIO_data_index ++;
-                        EASY_END_BLOCK
-
-                    }else{
-                        LOG_MESSAGE(Logger::ERROR, "More data requested!");
-                    }
-
-                }else if(response.data[0] == BREAKPOINT_HIT){
-                    LOG_MESSAGE(Logger::INFO, "Received exit breakpoint hit.");
-                    break;
-                }else{
-                    LOG_MESSAGE(Logger::INFO, "Continuing: Other");
-
-                    EASY_BLOCK("Sending Continue");
-                        //Continue
-                        request.command = CONTINUE;
-                        request.dataLength = 0;
-                        sendRequest(&request, &response);
-                    EASY_END_BLOCK
-                }
-            }
-
-            EASY_BLOCK("Getting exit value");
-                //Get exit status.
-                request.command = GET_EXIT_STATUS;
-                request.dataLength = 0;
-                sendRequest(&request, &response);
-                ret_value = response.data[0];
-                LOG_MESSAGE(Logger::INFO, "Exit code: %d", ret_value);
-            EASY_END_BLOCK
-
-            /*
-            EASY_BLOCK("Getting code coverage");
-                //Get code coverage.
-                achtung das muss noch geändert werden! also data 0 muss zu command
-                request.data[0] = GET_CODE_COVERAGE;
-                request.dataLength = 1;
-                sendRequest(&request, &response);
-                int converage_length = (response.data[0]) | (response.data[1] << 8) | (response.data[2] << 16) | (response.data[3] << 24);
-                LOG_MESSAGE(Logger::INFO, "Coverage length: %d", converage_length);
-
-                bb_list_size = converage_length;
-
-                int received_length = 0;
-                while(received_length < converage_length) {
-                    size_t next_chunk_size = std::min(RESPONSE_LENGTH, converage_length-received_length);
-                    ssize_t bytes_read = mq_receive(mqt_responses, bb_list+received_length, next_chunk_size, NULL);
-                    received_length += next_chunk_size;
-                }
-                LOG_MESSAGE(Logger::INFO, "Coverage received!");
-            EASY_END_BLOCK 
-            */ 
-            
-
-            if(continueRun){
-                //TODO differently
-
-                LOG_MESSAGE(Logger::INFO, "Resetting run.");
-
-                EASY_BLOCK("Resetting code coverage");
-                    //Set exit breakpoint.
-                    request.command = RESET_CODE_COVERAGE;
-                    request.dataLength = 0;
-                    sendRequest(&request, &response);
-                EASY_END_BLOCK
-
-                //TODO set dynamically
-
-                EASY_BLOCK("Setting _start breakpoint");
-                    //Set exit breakpoint.
-                    request.command = SET_BREAKPOINT;
-                    request.data[0] = 0;
-                    strcpy(request.data+1, "main");
-                    request.dataLength = 5;
-                    sendRequest(&request, &response);
-                EASY_END_BLOCK
-
-                while(true){
-
-                    if(response.data[0] == BREAKPOINT_HIT){
-                        LOG_MESSAGE(Logger::INFO, "Received main breakpoint hit.");
-                        break;
-                    }else{
-                        LOG_MESSAGE(Logger::INFO, "Continuing: Other");
-
-                        EASY_BLOCK("Sending Continue");
-                            //Continue
-                            request.command = CONTINUE;
-                            request.dataLength = 0;
-                            sendRequest(&request, &response);
-                        EASY_END_BLOCK
-                    }
-
-                }
-            }
-
-        }
-
-        void kill(){
-            EASY_FUNCTION(profiler::colors::Magenta);
-
-            LOG_MESSAGE(Logger::INFO, "Killing ...");
-
-            Request request = Request();
-            Response response = Response();
-
-            EASY_BLOCK("killing");
-                //Kill
-                request.command = KILL;
-                request.dataLength = 0;
-                sendRequest(&request, &response);
-            EASY_END_BLOCK
-
-            LOG_MESSAGE(Logger::INFO, "Killed!");
-        }
-
-        int getRetValue(){
-            return ret_value;
-        }
-
-    private:
-
-        int ret_value = 0;
-
-};
-
-//TODO: schreiben das singleton ist weil wegen static instance, benötigt für static signal handler
-class AFLForkserver{
-
-    public:
-
-        static AFLForkserver* instance;
-    
-        AFLForkserver(VPClient* vp_client, std::string vp_executable, std::string vp_launch_args, std::string target_path, int vp_loglevel, std::string vp_logging_path, int fksrv_st_fd, int fksrv_ctl_fd){
-            _vp_client = vp_client;
-            _vp_executable = vp_executable;
-            _vp_launch_args = vp_launch_args;
-            _target_path = target_path;
-            _vp_loglevel = vp_loglevel;
-            _vp_logging_path = vp_logging_path;
-            _fksrv_st_fd = fksrv_st_fd;
-            _fksrv_ctl_fd = fksrv_ctl_fd;
-
-            instance = this;
-        };
-
-        std::string readFromTestcaseSharedMemory() {
-            
-            //Attaching shared memory if not attached yet.
-            if(_shm_input_data == nullptr){
-                _shm_input_data = static_cast<char*>(shmat(_shm_input_id, nullptr, SHM_RDONLY));
-                if (_shm_input_data == reinterpret_cast<char*>(-1)) {
-                    LOG_MESSAGE(Logger::ERROR, "Failed to attach test case shared memory segment: %s", strerror(errno));
-                    _shm_input_data = nullptr;
-                    return "";
-                }
-
-                //the fuzzing input actually starts after this uint32_t.
-                _shm_input_data += sizeof(uint32_t);
-            }
-
-            
-            struct shmid_ds shm_info;
-            if (shmctl(_shm_input_id, IPC_STAT, &shm_info) == -1) {
-                LOG_MESSAGE(Logger::ERROR, "Reading length of shared memory of id %d.", _shm_input_id);
-                return "";
-            }
-
-            std::string readData;
-
-            //If there is not a termination character at the end, copy the data and change the last character to one. This is necessary, because the shared memory is only opnened in ready-only mode.
-            if(_shm_input_data[(size_t)shm_info.shm_segsz] != 0){
-
-                LOG_MESSAGE(Logger::WARNING, "Last character of test case was not a termination character!");
-                
-                char* temp = (char*)malloc((size_t)shm_info.shm_segsz);
-                memcpy(temp, _shm_input_data, (size_t)shm_info.shm_segsz);
-                temp[(size_t)shm_info.shm_segsz] = 0;
-                readData = std::string(temp);
-                free(temp);
-
-            }else{
-                // Copy the data to a std::string to handle automatic memory management
-                readData = std::string(_shm_input_data);
-            }
-            
-            return readData;
-        }
-
-        bool writeToCoverageSharedMemory(int shm_id, const char* data, size_t size) {
-
-            //Attaching shared memory if not attached yet.
-            if(_shm_cov_data == nullptr){
-                _shm_cov_data = static_cast<char*>(shmat(_shm_cov_id, nullptr, 0));
-                if (_shm_cov_data == reinterpret_cast<char*>(-1)) {
-                    LOG_MESSAGE(Logger::ERROR, "Failed to attach test case shared memory segment: %s", strerror(errno));
-                    _shm_cov_data = nullptr;
-                    return false;
-                }
-            }
-
-            struct shmid_ds shm_info;
-            if (shmctl(_shm_cov_id, IPC_STAT, &shm_info) == -1) {
-                LOG_MESSAGE(Logger::ERROR, "Reading length of shared memory of id %d.", _shm_cov_id);
-                return "";
-            }
-
-            if(size > (size_t)shm_info.shm_segsz){
-                LOG_MESSAGE(Logger::ERROR, "Size of the data %d is larger then the shared memory segment (%d) .", size, (int)shm_info.shm_segsz);
-                return false;
-            }
-
-            // Write the data to the shared memory
-            std::memcpy(_shm_cov_data, data, shm_info.shm_segsz);
-
-            return true;
-        }
-
-        pid_t start_vp(){
-            EASY_FUNCTION(profiler::colors::Blue);
             EASY_BLOCK("Start VP process");
 
-                std::string command = _vp_executable+" "+_vp_launch_args+" "+_target_path;
-                LOG_MESSAGE(Logger::INFO, "Starting VP with command: %s", command.c_str());
+                LOG_MESSAGE(logger::INFO, "Starting VP %s", m_vp_executable.c_str());
 
+                // Create a child process.
                 pid_t pid = fork();
-                if (pid == 0) { // Child process
-
-                    // Redirect stdout and stderr to files or /dev/null
-                    int logging;
+                if (pid == 0) {
+                    // Inside the child process.
 
                     std::string logErrorsOnlyArg = "";
+                    
+                    // Redirect stdout and stderr to files or /dev/null.
+                    int logging;
 
-                    if(_vp_loglevel > 0){
-                        logging = open(_vp_logging_path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0666);
+                    // Create/open a logging file if logging is not disabled.
+                    if(m_vp_loglevel > 0){
+                        logging = open(m_vp_logging_path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0666);
                     }else{
                         logging = open("/dev/null", O_WRONLY);
                     }
-
+                    
+                    // Redirect output and error messages to the file or /dev/null (deleting them).
                     dup2(logging, STDOUT_FILENO);
                     dup2(logging, STDERR_FILENO);
                     close(logging);
 
-                    //TODO splie args into multiple
-                    //execl("/bin/sh", "sh", "-c", command.c_str(), (char*)NULL);
-
+                    // Args vector.
                     std::vector<char*> argv;
-                    argv.push_back(strdup(_vp_executable.c_str()));
 
-                    if(_vp_loglevel == 2){
+                    // Add the name of the executable to the first argument.
+                    argv.push_back(strdup(m_vp_executable.c_str()));
+
+                    // If log level is set to only errors, signal this to the VP.
+                    if(m_vp_loglevel == 2){
                         std::string log_errors_only = "--log-errors-only";
                         argv.push_back(strdup(log_errors_only.c_str()));
                     }
 
-                    std::istringstream iss(_vp_launch_args);
+                    // TODO into ENV ?
+                    std::string full_launch_args = " --enable-test-receiver --test-receiver-interface 1 --test-receiver-pipe-request "+std::to_string(vp_pipe_client->get_request_fd())+" --test-receiver-pipe-response "+std::to_string(vp_pipe_client->get_response_fd())+" "+m_vp_launch_args;
+
+                    // TODO 
+                    std::istringstream iss(full_launch_args);
                     std::string token;
                     while (iss >> token) {
                         argv.push_back(strdup(token.c_str()));
                     }
 
-                    argv.push_back(strdup(_target_path.c_str()));
+                    argv.push_back(strdup(m_target_path.c_str()));
                     argv.push_back(nullptr);
 
-
+                    // Execute the VP in this process.
                     execvp(argv[0], argv.data());
                     exit(127); // only if exec fails
 
-                } else if (pid < 0) {
-                    LOG_MESSAGE(Logger::ERROR, "Failed to fork process.");
-                    shotdown();
-                    exit(1);
                 }
 
                 // Parent process
-                LOG_MESSAGE(Logger::INFO, "Child process created: %d", (int)pid);
+                LOG_MESSAGE(logger::INFO, "Child process created: %d", (int)pid);
 
-                return pid;
+                vp_process = pid;
+                vp_process_state = STARTED;
 
             EASY_END_BLOCK
 
-            return -1;
+            return vp_process > 0;
+        }
+
+        // Killing the current VP process.
+        void kill_process(){
+            EASY_FUNCTION(profiler::colors::Yellow);
+
+            if(vp_process == -1){
+                LOG_MESSAGE(logger::INFO, "Cannot kill the VP process, because there is none!");
+                return;
+            }
+
+            vp_process_state = KILLING;
+
+            LOG_MESSAGE(logger::INFO, "Killing VP process %d ...", vp_process);
+
+            // Killing the VP child process
+            kill(vp_process, SIGKILL);
+            int status;
+            waitpid(-1, &status, WNOHANG);
+
+            vp_process = -1;
+            vp_process_state = NOT_EXISTING;
+
+            // Reset ready state of pipe client, because the VP process is not existing anymore. So waiting_for_ready needs to be called again for the new process.
+            vp_pipe_client->reset_ready();
+
+            LOG_MESSAGE(logger::INFO, "VP process killed.", vp_process);
+        }
+
+        // Restarting the VP process.
+        void restart_process(){
+            //kill_vp();
+            // TODO wait ?
+            kill_process();
+            start_process();
+
+            //TODO do not do bussy waiting !
+            waiting_for_ready();
+            setup();
+
+            // TODO better logging: context of INSTANCE_RESTARTER!
+            LOG_MESSAGE(logger::INFO, "Restart of VP process done!");
+        }
+
+        // Waits for the VP to be ready.
+        void waiting_for_ready() {
+            EASY_FUNCTION(profiler::colors::Red);
+
+            EASY_BLOCK("Waiting for VP ready message");
+                LOG_MESSAGE(logger::INFO, "Waiting for ready message.");
+                //TODO check for error (return bool!) also with the others!
+                vp_pipe_client->wait_for_ready();
+            EASY_END_BLOCK
+        }
+
+        // Setups the VP for fuzzing with MMIO interception and code coverage tracking.
+        void setup(){
+            EASY_FUNCTION(profiler::colors::Magenta);
+
+            LOG_MESSAGE(logger::INFO, "Setting up..");
+
+            testing::request req = testing::request();
+            testing::response res = testing::response();
+
+            // Sends the ENABLE_CODE_COVERAGE command to the VP.
+            EASY_BLOCK("Enable code coverage tracking");
+                req.request_command = testing::ENABLE_CODE_COVERAGE;
+                req.data_length = 0;
+                vp_pipe_client->send_request(&req, &res);
+            EASY_END_BLOCK
+
+            // Sends the ENABLE_MMIO_TRACKING command to the VP with the start and end address specified in envs.
+            EASY_BLOCK("Enable MMIO tracking");
+                req.request_command = testing::ENABLE_MMIO_TRACKING;
+                req.data_length = 17;
+                req.data = (char*)malloc(req.data_length);
+                testing::testing_communication::int64_to_bytes(m_mmio_start_address, req.data, 0);
+                testing::testing_communication::int64_to_bytes(m_mmio_end_address, req.data, 8);
+                // Sets the mode to only intercept read requests.
+                req.data[16] = 1;
+                vp_pipe_client->send_request(&req, &res);
+            EASY_END_BLOCK
+
+            // Freeing of req, res data not needed, because ther is none.
+
+            LOG_MESSAGE(logger::INFO, "Setup done.");
+
+            // Setting process state to ready to indicate this instance can be used for testing.
+            vp_process_state = READY;
+        }
+
+        // Requests the VP to write the code coverage to a shared memory region.
+        void write_code_coverage(int shm_id, unsigned int offset){
+            EASY_FUNCTION(profiler::colors::Blue);
+
+            LOG_MESSAGE(logger::INFO, "Request to write code coverage to: %d.", shm_id);
+
+            testing::request req = testing::request();
+            testing::response res = testing::response();
+
+            // Sends the GET_CODE_COVERAGE_SHM command to the VP, which writes the code coverage to the shm_id with the offset.
+            EASY_BLOCK("Writing code coverage");
+                req.request_command = testing::GET_CODE_COVERAGE_SHM;
+                req.data_length = 8;
+                req.data = (char*)malloc(req.data_length);
+                testing::testing_communication::int32_to_bytes((uint32_t)shm_id, req.data, 0);
+                testing::testing_communication::int32_to_bytes((uint32_t)offset, req.data, 4);
+                vp_pipe_client->send_request(&req, &res);
+            EASY_END_BLOCK
+
+            // Freeing req and res data.
+            free(req.data);
+            free(res.data);
+        }
+
+        // Requests one run of the VP with a test case.
+        void do_run(uint64_t address, std::string start_breakpoint, std::string end_breakpoint, std::string return_register, int shm_id, unsigned int offset){
+            EASY_FUNCTION(profiler::colors::Blue);
+            
+            LOG_MESSAGE(logger::INFO, "Requesting single run with start breakpoint %s to end breakpoint %s with MMIO data at %d.", start_breakpoint.c_str(), end_breakpoint.c_str(), shm_id);
+
+            testing::request req = testing::request();
+            testing::response res = testing::response();
+            
+            // Sends the DO_RUN_SHM request to the VP with the shared memory, return address and register and breakpoints.
+            EASY_BLOCK("Requesting single run");
+                req.request_command = testing::DO_RUN_SHM;
+
+                req.data_length = 20+start_breakpoint.size()+end_breakpoint.size()+return_register.size();
+                req.data = (char*)malloc(req.data_length);
+
+                testing::testing_communication::int64_to_bytes(address, req.data, 0);
+                testing::testing_communication::int32_to_bytes((uint32_t)shm_id, req.data, 8);
+                testing::testing_communication::int32_to_bytes((uint32_t)offset, req.data, 12);
+                // Stop reading the shared memory after string termination
+                req.data[16] = 1;
+                req.data[17] = start_breakpoint.size();
+                req.data[18] = end_breakpoint.size();
+                req.data[19] = return_register.size();
+                strcpy(req.data+20, start_breakpoint.c_str());
+                strcpy(req.data+20+start_breakpoint.size(), end_breakpoint.c_str());
+                strcpy(req.data+20+start_breakpoint.size()+end_breakpoint.size(), return_register.c_str());
+
+                vp_pipe_client->send_request(&req, &res);
+            EASY_END_BLOCK
+
+            // Freeing req data.
+            free(req.data);
+        }
+
+        // Getting the return code from the VP. The return code was recoreded during the do_run function.
+        void get_return_code(){
+            EASY_FUNCTION(profiler::colors::Blue);
+
+            testing::request req = testing::request();
+            testing::response res = testing::response();
+
+            // Sending command GET_RETURN_CODE to the VP.
+            EASY_BLOCK("Getting return value");
+                //Get exit status.
+                req.request_command = testing::GET_RETURN_CODE;
+                req.data_length = 0;
+                vp_pipe_client->send_request(&req, &res);
+                m_ret_value = testing::testing_communication::bytes_to_int64(res.data, 0);
+                LOG_MESSAGE(logger::INFO, "Run done. Return code: %d", m_ret_value);
+            EASY_END_BLOCK
+
+            // Freeing res data.
+            free(res.data);
+        }
+
+        // Killing the VP
+        void kill_vp(){
+            EASY_FUNCTION(profiler::colors::Magenta);
+
+            LOG_MESSAGE(logger::INFO, "Killing VP ...");
+
+            testing::request req = testing::request();
+            testing::response res = testing::response();
+
+            // Sending KILL command to the VP.
+            EASY_BLOCK("Killing VP");
+                //Kill
+                req.request_command= testing::KILL;
+                req.data_length = 1;
+                req.data = (char*)malloc(1);
+                //Killing the VP not gracefully.
+                req.data[0] = 0;
+                vp_pipe_client->send_request(&req, &res);
+            EASY_END_BLOCK
+
+            // Free request data.
+            free(req.data);
+
+            LOG_MESSAGE(logger::INFO, "VP Killed!");
+        }
+
+        // Getter for the return value.
+        uint64_t get_return_code_value(){
+            return m_ret_value;
+        }
+
+    private:
+
+        uint64_t m_ret_value = 0;
+
+        std::string m_vp_executable;
+        int m_vp_loglevel;
+        std::string m_vp_logging_path;
+        std::string m_vp_launch_args;
+        std::string m_target_path;
+
+        uint64_t m_mmio_start_address;
+        uint64_t m_mmio_end_address;
+
+};
+
+// Client that interfaces with AFLplusplus in vp-mode (-V).
+class afl_client{
+
+    public:
+
+        // The afl_client is a singleton. This reference is used for the signal handler.
+        static afl_client* instance;
+
+        // Creates a afl_client instance with its parameters.
+        afl_client(int mode, int vp_instances, std::string vp_executable, std::string vp_launch_args, std::string target_path, int vp_loglevel, std::string vp_logging_path, int fksrv_st_fd, int fksrv_ctl_fd){
+            m_mode = mode;
+
+            // 0: Restarting mode, 1: Persistent mode
+            if(m_mode == 0){
+                if(vp_instances > MAX_VP_INSTANCES){
+                    LOG_MESSAGE(logger::ERROR, "More than %d instances are not supported yet.", MAX_VP_INSTANCES);
+                    // TODO differently
+                    exit(1);
+                }
+                m_vp_clients_count = vp_instances;
+
+            }else if(m_mode == 1){
+                m_vp_clients_count = 1;
+
+            }else{
+
+                LOG_MESSAGE(logger::ERROR, "Mode %d not supported!", mode);
+                // TODO differently
+                exit(1);
+            }
+            
+            m_vp_executable = vp_executable;
+            m_vp_launch_args = vp_launch_args;
+            m_target_path = target_path;
+            m_vp_loglevel = vp_loglevel;
+            m_vp_logging_path = vp_logging_path;
+            m_fksrv_st_fd = fksrv_st_fd;
+            m_fksrv_ctl_fd = fksrv_ctl_fd;
+
+            // Setting the instance to this one.
+            instance = this;
+        };
+
+        // Static thread that watches a vp_client array and restarts them if needed.
+        static void instance_restarter(int core_id, vp_client** clients_pointer, int clients_count){
+
+            cpu_set_t cpuset;
+            CPU_ZERO(&cpuset);
+            CPU_SET(core_id, &cpuset);
+
+            // Setting core affinity of this thread to another CPU.
+            pthread_t thread = pthread_self();  // Get current thread ID
+            if (pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuset) != 0) {
+                LOG_MESSAGE(logger::ERROR, "INSTANCE_RESTARTER: Failed to set thread affinity of restarter thread!");
+            }
+
+            LOG_MESSAGE(logger::INFO, "INSTANCE_RESTARTER: Restarter thread succesfully started!");
+
+            // Forever check the vp_clients if the process need to be restarted.
+            while(true){
+                
+                for(int i=0; i<clients_count; i++){
+                    
+                    // Synchronize the access to the vp_clients to not cause issues, when multiple restarter threads are working.
+                    std::unique_lock<std::mutex> lock(restarter_mutex);
+                    if(clients_pointer[i]->vp_process_state == vp_client::DONE){
+                        
+                        // Set the state to killing so no other restarter thread will pick this client to also do the restarting.
+                        clients_pointer[i]->vp_process_state = vp_client::KILLING;
+
+                        // Release the lock so the other restarter threads can check the others.
+                        lock.unlock();
+
+                        LOG_MESSAGE(logger::INFO, "INSTANCE_RESTARTER: Restarting instance %d.", i);
+                        clients_pointer[i]->restart_process();
+                        LOG_MESSAGE(logger::INFO, "INSTANCE_RESTARTER: Done restarting %d.", i);
+                    }
+                }
+            }
         }
         
-        void fksrv_start(int shm_cov_id, int shm_input_id, bool restart) {
+        // Starts the forkserver client.
+        void start(uint64_t mmio_address, std::string start_breakpoint, std::string end_breakpoint, std::string return_code_register,  int shm_cov_id, int shm_input_id) {
 
-            _shm_cov_id = shm_cov_id;
-            _shm_input_id = shm_input_id;
+            // TODO logging seperation of different processes
+
+            // Start the vp clients and processes after another the frist time.
+            for(int i=0; i<m_vp_clients_count; i++){
+                // Using mmio_address ass the start and end address of the mmio tracking (because we are only interested in this specific address).
+                m_vp_clients[i] = new vp_client(m_vp_executable, m_vp_loglevel, m_vp_logging_path, m_vp_launch_args, m_target_path, mmio_address, mmio_address);
+                m_vp_clients[i]->start_process();
+                m_vp_clients[i]->waiting_for_ready();
+                m_vp_clients[i]->setup();
+            }
+
+            // TODO only in not persistent / snapshotting mode!
+            // TODO restart with only one instance do in the same thread and not instance restarter !?
+            
+            // The instance restarter will now take care of the restarting, but only when more that one vp client instance is used.
+            if (m_vp_clients_count > 1){
+                std::thread([=]() {
+                    instance_restarter(10, m_vp_clients, m_vp_clients_count);
+                }).detach();
+            }
+
+            m_shm_cov_id = shm_cov_id;
+            m_shm_input_id = shm_input_id;
+
+            // Variable holding the index of the current used vp_client inside the m_vp_clients array.
+            m_vp_clients_index = 0;
 
             // Communicate initial status
             EASY_BLOCK("Communicate initial status");
                 int status = FS_OPT_ENABLED | FS_OPT_SHDMEM_FUZZ;
-                if (write(_fksrv_st_fd, &status, sizeof(status)) != sizeof(status)) {
-                    LOG_MESSAGE(Logger::ERROR, "Not running in forkserver mode, just executing the program.");
+                if (write(m_fksrv_st_fd, &status, sizeof(status)) != sizeof(status)) {
+                    LOG_MESSAGE(logger::ERROR, "Not running in forkserver mode, just executing the program.");
                 }
             EASY_END_BLOCK
 
             // Read response from AFL
             EASY_BLOCK("Read response from AFL");
                 int read_status;
-                if (read(_fksrv_ctl_fd, &read_status, sizeof(read_status)) != sizeof(read_status)) {
-                    LOG_MESSAGE(Logger::ERROR, "AFL parent exited before forkserver was up.");
-                    shotdown();
+                if (read(m_fksrv_ctl_fd, &read_status, sizeof(read_status)) != sizeof(read_status)) {
+                    LOG_MESSAGE(logger::ERROR, "AFL parent exited before forkserver was up.");
+                    shutdown();
                     exit(1);
                 } else if (read_status != status) {
-                    LOG_MESSAGE(Logger::INFO, "Read response from AFL: %d need %d", read_status, status);
-                    LOG_MESSAGE(Logger::ERROR, "Unexpected response from AFL++ on forkserver setup.");
-                    shotdown();
+                    LOG_MESSAGE(logger::INFO, "Read response from AFL: %d need %d", read_status, status);
+                    LOG_MESSAGE(logger::ERROR, "Unexpected response from AFL++ on forkserver setup.");
+                    shutdown();
                     exit(1);
                 }
             EASY_END_BLOCK
 
-            while (true) {
+            do{
 
-                if(restart || _run_frist_loop){
-
-                    //if restart is enabled and this is not the frist loop kill the old VP.
-                    if(restart && !_run_frist_loop){
-                        _vp_client->kill();
-                        kill(_current_child, SIGKILL);
-                        int status;
-                        waitpid(-1, &status, WNOHANG);
-                        LOG_MESSAGE(Logger::INFO, "VP instance %d killed, because restarting is enabled.", (int)_current_child);
-                    }
-
-                    _run_frist_loop = false;
-
-                    //Start new VP instance.
-                    _current_child = start_vp();
-                    if(_current_child < 0){
-                        LOG_MESSAGE(Logger::ERROR, "Creating child process!");
-                        break;
-                    }
-
-                    // Waiting for VP to get ready
-                    _vp_client->waitingForReady();
-                    _vp_client->setup();
-                }
+                LOG_MESSAGE(logger::INFO, "Using instance %d.", m_vp_clients_index);
 
                 // TODO: dont know for what this is for !?
                 int child_killed;
-                if (read(_fksrv_ctl_fd, &child_killed, sizeof(child_killed)) != sizeof(child_killed)) {
-                    LOG_MESSAGE(Logger::ERROR, "AFL parent exited before we could fork.");
-                    shotdown();
+                if (read(m_fksrv_ctl_fd, &child_killed, sizeof(child_killed)) != sizeof(child_killed)) {
+                    LOG_MESSAGE(logger::ERROR, "AFL parent exited before we could fork.");
+                    shutdown();
                     exit(1);
                 }
 
-                LOG_MESSAGE(Logger::INFO, "Child Killed: %d", child_killed);
+                LOG_MESSAGE(logger::INFO, "Child Killed: %d", child_killed);
 
                 if (child_killed > 0) {
                     
@@ -746,80 +642,85 @@ class AFLForkserver{
                     int status;
                     waitpid(-1, &status, WNOHANG); // Simplified waiting
                     status = swapEndian(status);
-                    write(_fksrv_st_fd, &status, sizeof(status));
+                    write(m_fksrv_st_fd, &status, sizeof(status));
                     kill();
                     exit(1);
                     */
                 }
 
-                // Run with test case and writing coverage.
-                /*
-                EASY_BLOCK("Read test case");
-                    std::string test_case = readFromTestcaseSharedMemory();
-                    LOG_MESSAGE(Logger::INFO, "Test case loaded from shared memory: %s", test_case.c_str());
-                EASY_END_BLOCK
-                */
-
                 EASY_BLOCK("Communicate child ID");
+
+                    pid_t current_child = m_vp_clients[m_vp_clients_index]->vp_process;
+
                     // Get pid and write it to AFL
-                    if (write(_fksrv_st_fd, &_current_child, sizeof(_current_child)) != sizeof(_current_child)) {
-                        LOG_MESSAGE(Logger::ERROR, "Failed to communicate with AFL.");
-                        shotdown();
+                    if (write(m_fksrv_st_fd, &current_child, sizeof(current_child)) != sizeof(current_child)) {
+                        LOG_MESSAGE(logger::ERROR, "Failed to communicate with AFL.");
+                        shutdown();
                         exit(1);
                     }
                 EASY_END_BLOCK
 
-                //vp_client->run(test_case, false);
-                _vp_client->run_single("main", "exit", shm_input_id, 4);
+                m_vp_clients[m_vp_clients_index]->do_run(mmio_address, start_breakpoint, end_breakpoint, return_code_register, shm_input_id, 4);
+                m_vp_clients[m_vp_clients_index]->get_return_code();
 
-                //EASY_BLOCK("Writing coverage"); 
-                //    writeToSharedMemory(shm_cov_id, vp_client->bb_list, vp_client->bb_list_size);
-                //EASY_END_BLOCK
 
-                LOG_MESSAGE(Logger::INFO, "Writing code coverage");
-                _vp_client->write_code_coverage(shm_cov_id, 0);
+                LOG_MESSAGE(logger::INFO, "Writing code coverage");
+                m_vp_clients[m_vp_clients_index]->write_code_coverage(shm_cov_id, 0);
 
-                LOG_MESSAGE(Logger::INFO, "Finished, sending status!");
+                LOG_MESSAGE(logger::INFO, "Finished, sending status!");
 
                 EASY_BLOCK("Communicate return value");  
-                    int status = _vp_client->getRetValue();
-                    if (write(_fksrv_st_fd, &status, sizeof(status)) != sizeof(status)) {
-                        LOG_MESSAGE(Logger::ERROR, "Failed to send status to AFL.");
-                        shotdown();
+                    int status = m_vp_clients[m_vp_clients_index]->get_return_code_value();
+                    if (write(m_fksrv_st_fd, &status, sizeof(status)) != sizeof(status)) {
+                        LOG_MESSAGE(logger::ERROR, "Failed to send status to AFL.");
+                        shutdown();
                         exit(1);
                     }
                 EASY_END_BLOCK
+
+
+                // Only restart whole VP process if restarting mode is enabled.
+                if(m_mode == 0){
+
+                    LOG_MESSAGE(logger::INFO, "Moving to next instance!");
+
+                    m_vp_clients[m_vp_clients_index]->vp_process_state = vp_client::DONE;
+                    
+                    // If more than one vp instance is used, the instance restarter thread will do the restarting, so we just need to select one ready instance.
+                    if(m_vp_clients_count > 1){
+                        // Bussy searching for an instance where the VP process state is READY and thus it can be used!
+                        while(true){
+                            m_vp_clients_index = (m_vp_clients_index + 1) % m_vp_clients_count;
+
+                            std::unique_lock<std::mutex> lock(restarter_mutex);
+                            if(m_vp_clients[m_vp_clients_index]->vp_process_state == vp_client::READY) break;
+                            lock.unlock();
+                        }
+                    }else{
+                        // If only one instance is used, do the restarting here, because there is no instance restarter thread.
+                        m_vp_clients[m_vp_clients_index]->restart_process();
+                    }
+                }
+
 
                 //Only profile a fixed number of runs
                 #ifdef PROFILER_ENABLED
                     _profiler_count ++;
                     if(_profiler_count == PROFILING_COUNT){
-                        LOG_MESSAGE(Logger::INFO, "Writing profiling file.");
+                        LOG_MESSAGE(logger::INFO, "Writing profiling file.");
                         profiler::dumpBlocksToFile("test_client.prof");
                     }
                 #endif
             
-            }
+            }while(true);
 
-            _vp_client->kill();
-
-            //TODO kill vp process!!!
+            shutdown();
         }
 
-        void shotdown(){
+        void shutdown(){
             //TODO SIGTERM or SIGKILL ?
-            _vp_client->kill();
-            kill(_current_child, SIGKILL);
-            int status;
-            waitpid(-1, &status, WNOHANG);
-
-            // Detaching shared memory, when attached.
-            if (_shm_cov_data != nullptr && shmdt(_shm_cov_data) == -1) {
-                LOG_MESSAGE(Logger::ERROR, "Failed to detach testcase shared memory: %s", strerror(errno));
-            }
-
-            if (_shm_input_data != nullptr && shmdt(_shm_cov_data) == -1) {
-                LOG_MESSAGE(Logger::ERROR, "Failed to detach coverage shared memory: %s", strerror(errno));
+            for(int i=0; i<m_vp_clients_count; i++){
+                m_vp_clients[i]->kill_process();
             }
         }
 
@@ -829,40 +730,44 @@ class AFLForkserver{
 
         static void signal_handler(int sig) {
             // Handle SIGTERM or other signals as needed
-            LOG_MESSAGE(Logger::ERROR, "Terminating on signal %d", sig);
+            LOG_MESSAGE(logger::ERROR, "Terminating on signal %d", sig);
 
             // killing current vp instance
             if(instance != nullptr){
-                instance->shotdown();
+                instance->shutdown();
             }
 
             exit(0);
         }
 
     private:
-    
-        VPClient* _vp_client;
-        std::string _vp_executable;
-        std::string _vp_launch_args;
-        std::string _target_path;
-        int _vp_loglevel = 0;
-        std::string _vp_logging_path;
+        
+        // Maximum of MAX_VP_INSTANCES instances.
+        vp_client* m_vp_clients[MAX_VP_INSTANCES];
+
+        int m_mode = 0;
+
+        int m_vp_clients_count;
+        int m_vp_clients_index = 0;
+
+        std::string m_vp_executable;
+        std::string m_vp_launch_args;
+        std::string m_target_path;
+        int m_vp_loglevel = 0;
+        std::string m_vp_logging_path;
         int _profiler_count = 0;
-        int _fksrv_st_fd = -1;
-        int _fksrv_ctl_fd = -1;
+        int m_fksrv_st_fd = -1;
+        int m_fksrv_ctl_fd = -1;
 
-        int _shm_cov_id = -1;
-        char* _shm_cov_data;
-        int _shm_input_id = -1;
-        char* _shm_input_data;
+        int m_shm_cov_id = -1;
+        int m_shm_input_id = -1;
 
-        bool _run_frist_loop = true;
-
-        pid_t _current_child = -1;
+        static std::mutex restarter_mutex;
 
 };
 
-AFLForkserver* AFLForkserver::instance = nullptr;
+afl_client* afl_client::instance = nullptr;
+std::mutex afl_client::restarter_mutex;
 
 int main(int argc, char* argv[]) {
     // Start profiler
@@ -888,68 +793,68 @@ int main(int argc, char* argv[]) {
                 }
 
                 if(logLevel > 0 && logging_path){
-                    Logger::init(logging_path, (Logger::LogLevel)logLevel);
-                    LOG_MESSAGE(Logger::WARNING, "LOGGING ENABLED!");
+                    logger::init(logging_path, (logger::log_level)logLevel);
+                    LOG_MESSAGE(logger::WARNING, "LOGGING ENABLED!");
                 }
             }
             
             // Check required parameters
             if (argc != 6) {
-                LOG_MESSAGE(Logger::ERROR, "Wrong parameters!");
+                LOG_MESSAGE(logger::ERROR, "Wrong parameters!");
                 return 1;
             }
 
             const char* target_path = argv[1];
-            LOG_MESSAGE(Logger::INFO, "Target program path: %s", target_path);
+            LOG_MESSAGE(logger::INFO, "Target program path: %s", target_path);
 
             int shm_input = 0;
             try{
                 shm_input = std::stoi(argv[2]);
-                LOG_MESSAGE(Logger::INFO, "Shared memory ID for test cases: %d", shm_input);
+                LOG_MESSAGE(logger::INFO, "Shared memory ID for test cases: %d", shm_input);
             }catch(std::exception &e){
-                LOG_MESSAGE(Logger::INFO, "Argument test case shared memory is not a valid number!");
+                LOG_MESSAGE(logger::INFO, "Argument test case shared memory is not a valid number!");
                 return 1;
             }
 
             int shm_cov = 0;
             try{
                 shm_cov = std::stoi(argv[3]);
-                LOG_MESSAGE(Logger::INFO, "Shared memory ID for code coverage: %d", shm_cov);
+                LOG_MESSAGE(logger::INFO, "Shared memory ID for code coverage: %d", shm_cov);
             }catch(std::exception &e){
-                LOG_MESSAGE(Logger::INFO, "Argument coverage shared memory is not a valid number!");
+                LOG_MESSAGE(logger::INFO, "Argument coverage shared memory is not a valid number!");
                 return 1;
             }
 
             int ctl_fd = 0;
             try{
                 ctl_fd = std::stoi(argv[4]);
-                LOG_MESSAGE(Logger::INFO, "Forkserver control FD: %d", ctl_fd);
+                LOG_MESSAGE(logger::INFO, "Forkserver control FD: %d", ctl_fd);
             }catch(std::exception &e){
-                LOG_MESSAGE(Logger::INFO, "Argument for forkserver control FD is not a valid number!");
+                LOG_MESSAGE(logger::INFO, "Argument for forkserver control FD is not a valid number!");
                 return 1;
             }
 
             int st_fd = 0;
             try{
                 st_fd = std::stoi(argv[5]);
-                LOG_MESSAGE(Logger::INFO, "Forkserver status FD: %d", st_fd);
+                LOG_MESSAGE(logger::INFO, "Forkserver status FD: %d", st_fd);
             }catch(std::exception &e){
-                LOG_MESSAGE(Logger::INFO, "Argument for forkserver status FD is not a valid number!");
+                LOG_MESSAGE(logger::INFO, "Argument for forkserver status FD is not a valid number!");
                 return 1;
             }
 
-            //Check settings vom environment variables
+            //Check settings from environment variables
             const char* vp_executable = std::getenv("TC_VP_EXECUTABLE");
             if(vp_executable){
-                LOG_MESSAGE(Logger::INFO, "VP executable (TC_VP_EXECUTABLE): %s", vp_executable);
+                LOG_MESSAGE(logger::INFO, "VP executable (TC_VP_EXECUTABLE): %s", vp_executable);
             }else{
-                LOG_MESSAGE(Logger::ERROR, "TC_VP_EXECUTABLE envirnoment variable not set!");
+                LOG_MESSAGE(logger::ERROR, "TC_VP_EXECUTABLE envirnoment variable not set!");
                 return 1;
             }
 
             const char* vp_launch_args = std::getenv("TC_VP_LAUNCH_ARGS");
             if(vp_launch_args){
-                LOG_MESSAGE(Logger::INFO, "VP launch args (TC_VP_LAUNCH_ARGS): %s", vp_launch_args);
+                LOG_MESSAGE(logger::INFO, "VP launch args (TC_VP_LAUNCH_ARGS): %s", vp_launch_args);
             }else{
                 vp_launch_args = "";
             }
@@ -963,13 +868,13 @@ int main(int argc, char* argv[]) {
                 try{
                     vp_loglevel = std::stoi(vp_logging);
                 }catch(std::exception &e){
-                    LOG_MESSAGE(Logger::ERROR, "Could not parse value of TC_VP_LOGGING! Logging disabled.");
+                    LOG_MESSAGE(logger::ERROR, "Could not parse value of TC_VP_LOGGING! Logging disabled.");
                 }
 
                 if(vp_loglevel > 0 && logging_path){
-                    LOG_MESSAGE(Logger::INFO, "VP logging path (TC_VP_LOGGING_PATH): %s", vp_logging_path);
+                    LOG_MESSAGE(logger::INFO, "VP logging path (TC_VP_LOGGING_PATH): %s", vp_logging_path);
                 }else{
-                    LOG_MESSAGE(Logger::ERROR, "TC_VP_LOGGING_PATH envirnoment variable not set, but TC_VP_LOGGING enabled! Disabling VP logging.");
+                    LOG_MESSAGE(logger::ERROR, "TC_VP_LOGGING_PATH envirnoment variable not set, but TC_VP_LOGGING enabled! Disabling VP logging.");
                     vp_loglevel = 0;
                     vp_logging_path = "";
                 }
@@ -980,84 +885,117 @@ int main(int argc, char* argv[]) {
 
             const char* kill_old = std::getenv("TC_KILL_OLD");
             if(kill_old && strcmp(kill_old, "1") == 0){
-                LOG_MESSAGE(Logger::INFO, "Killing old processes (TC_KILL_OLD) enabled.");
+                LOG_MESSAGE(logger::INFO, "Killing old processes (TC_KILL_OLD) enabled.");
                 
                 std::string command = "killall "+std::string(vp_executable);
                 int ret = system(command.c_str());
-                if (ret == -1) LOG_MESSAGE(Logger::ERROR, "Error occoured while trying to killall %d. Continuing.", vp_executable);
+                if (ret == -1) LOG_MESSAGE(logger::ERROR, "Error occoured while trying to killall %d. Continuing.", vp_executable);
 
                 ret = system("killall --older-than 5s " OWN_NAME);
-                if (ret == -1) LOG_MESSAGE(Logger::ERROR, "Error occoured while trying to killall %d. Continuing.", vp_executable);
+                if (ret == -1) LOG_MESSAGE(logger::ERROR, "Error occoured while trying to killall %d. Continuing.", vp_executable);
             }
 
             //TODO check after killing! Or do it multiple times
             //TODO fedback to afl about errors
 
-            const char* vp_restart_env = std::getenv("TC_VP_RESTART");
-            bool vp_restart = false;
-            if(vp_restart_env && strcmp(vp_restart_env, "1") == 0){
-                LOG_MESSAGE(Logger::INFO, "VP restarting (TC_VP_RESTART) enabled.");
-                vp_restart = true;
+            const char* mode_str = std::getenv("TC_MODE");
+            int mode = 0;
+            if(mode_str){
+                try{
+                    mode = std::stoi(mode_str);
+                    LOG_MESSAGE(logger::INFO, "Test client mode (TC_MODE) set to: %d", mode);
+                }catch(std::exception &e){
+                    LOG_MESSAGE(logger::ERROR, "Could not parse value of TC_MODE!");
+                    return 1;
+                }
+            }else{
+                LOG_MESSAGE(logger::ERROR, "TC_MODE envirnoment variable not set, but is required!");
+                return 1;
             }
 
-            VPClient vPClient = VPClient();
+            const char* vp_instances_str = std::getenv("TC_VP_INSTANCES");
+            int vp_instances = 1;
+            if(vp_instances_str){
+                try{
+                    vp_instances = std::stoi(vp_instances_str);
+                    LOG_MESSAGE(logger::INFO, "Number of VP instances (TC_VP_INSTANCES) set to: %d", vp_instances);
+                }catch(std::exception &e){
+                    LOG_MESSAGE(logger::ERROR, "Could not parse value of TC_VP_INSTANCES! Set to defaut: 1.");
+                    vp_instances = 1;
+                }
+            }
 
-            AFLForkserver aFLForkserver = AFLForkserver(&vPClient, vp_executable, vp_launch_args, target_path, vp_loglevel, vp_logging_path, st_fd, ctl_fd);
+            const char* start_symbol = std::getenv("TC_START_SYMBOL");
+            if(start_symbol){
+                LOG_MESSAGE(logger::INFO, "Start symbol (TC_START_SYMBOL): %s", start_symbol);
+            }else{
+                LOG_MESSAGE(logger::ERROR, "TC_START_SYMBOL envirnoment variable not set!");
+                return 1;
+            }
+
+            const char* end_symbol = std::getenv("TC_END_SYMBOL");
+            if(end_symbol){
+                LOG_MESSAGE(logger::INFO, "End symbol (TC_END_SYMBOL): %s", end_symbol);
+            }else{
+                LOG_MESSAGE(logger::ERROR, "TC_END_SYMBOL envirnoment variable not set!");
+                return 1;
+            }
+
+            const char* return_register = std::getenv("TC_RETURN_REGISTER");
+            if(return_register){
+                LOG_MESSAGE(logger::INFO, "Return register (TC_RETURN_REGISTER): %s", return_register);
+            }else{
+                LOG_MESSAGE(logger::ERROR, "TC_RETURN_REGISTER envirnoment variable not set!");
+                return 1;
+            }
+
+            const char* mmio_data_address_str = std::getenv("TC_MMIO_DATA_ADDRESS");
+            int mmio_data_address = 0;
+            if(mmio_data_address_str){
+                try{
+                    mmio_data_address = std::stoul(mmio_data_address_str, nullptr, 16);
+                    LOG_MESSAGE(logger::INFO, "MMIO data address (TC_MMIO_DATA_ADDRESS) set to: %d", mmio_data_address);
+                }catch(std::exception &e){
+                    LOG_MESSAGE(logger::ERROR, "Could not parse value of TC_MMIO_DATA_ADDRESS!");
+                    return 1;
+                }
+            }else{
+                LOG_MESSAGE(logger::ERROR, "TC_MMIO_DATA_ADDRESS envirnoment variable not set, but is required!");
+                return 1;
+            }
+
+            afl_client m_afl_client = afl_client(mode, vp_instances, vp_executable, vp_launch_args, target_path, vp_loglevel, vp_logging_path, st_fd, ctl_fd);
 
             // Set termination signal handler
-            std::signal(SIGTERM, AFLForkserver::signal_handler);
+            std::signal(SIGTERM, afl_client::signal_handler);
 
         EASY_END_BLOCK
-
-        
-        EASY_BLOCK("Attaching shared memory segments");
-            /*
-            // Get the shared memory segment ID
-            int shm_id_coverage = shmget((key_t)std::atoi(shm_cov_str), 0, 0666);  // 0 size, just attaching
-            if (shm_id_coverage == -1) {
-                LOG_MESSAGE(Logger::ERROR, "Failed to find shared memory segment: %s", strerror(errno));
-                exit(1);
-            }
-            
-
-           //LOG_MESSAGE(Logger::INFO, "Shared memory test: %s", getenv("__AFL_SHM_FUZZ_ID"));
-
-            // Get the shared memory segment ID
-            int shm_id_input = shmget(123457, 0, 0666);  // 0 size, just attaching
-            if (shm_id_input == -1) {
-                LOG_MESSAGE(Logger::ERROR, "Failed to find shared memory segment: %s", strerror(errno));
-                exit(1);
-            }
-
-            */
-
-        EASY_END_BLOCK;
         
 
-        aFLForkserver.fksrv_start(shm_cov, shm_input, vp_restart);
+        m_afl_client.start(mmio_data_address, start_symbol, end_symbol, return_register, shm_cov, shm_input);
 
     // Not AFL mode just does one simple run in avp64
     #else
 
-        Logger::init("tc_out.txt", Logger::ALL);
+        logger::init("tc_out.txt", logger::ALL);
 
-        LOG_MESSAGE(Logger::INFO, "Run manual.");
+        LOG_MESSAGE(logger::INFO, "Run manual.");
 
-        VPClient vPClient = VPClient();
-        vPClient.waitingForReady();
-        vPClient.setup();
+        vp_client vp_client = vp_client();
+        vp_client.waitingForReady();
+        vp_client.setup();
         
-        //vPClient.run("pasw", true);
-        //vPClient.run("pass", false);
-        //vPClient.kill();
+        //vp_client.run("pasw", true);
+        //vp_client.run("pass", false);
+        //vp_client.kill();
 
         //TODO fix (with shared memory)
-        vPClient.run_single("main", "exit", "pass");
-        vPClient.write_code_coverage(12345);
-        vPClient.kill();
+        vp_client.run_single("main", "exit", "pass");
+        vp_client.write_code_coverage(12345);
+        vp_client.kill();
 
         #ifdef PROFILER_ENABLED
-            LOG_MESSAGE(Logger::INFO, "Writing profiling file.");
+            LOG_MESSAGE(logger::INFO, "Writing profiling file.");
             profiler::dumpBlocksToFile("test_client.prof");
         #endif
     
