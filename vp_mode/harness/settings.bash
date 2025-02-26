@@ -4,7 +4,7 @@ export TC_PATH="$(pwd)/vp_mode/harness/build/test_client"
 # Path vp
 export TC_VP_EXECUTABLE="$(pwd)/vp_mode/avp64/install/bin/avp64-runner"
 # Launch arguments of vp
-export TC_VP_LAUNCH_ARGS="--enable-test-receiver --test-receiver-interface 1 --test-receiver-pipe-request 10 --test-receiver-pipe-response 11 -f"
+export TC_VP_LAUNCH_ARGS="-f"
 # Add required libraries
 export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$(pwd)/vp_mode/avp64/install/lib/:$(pwd)/vp_mode/avp64/install/lib64/"
 
