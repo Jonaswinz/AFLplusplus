@@ -722,9 +722,9 @@ endif
 	-cd unicorn_mode && unset CFLAGS && sh ./build_unicorn_support.sh
   endif
 endif
-	ifndef NO_VPMODE
-		-cd vp_mode && ./build_vp_support.sh
-	endif
+ifndef NO_VPMODE
+	-cd vp_mode && ./build_vp_support.sh
+endif
 	@echo
 	@echo
 	@echo Build Summary:
@@ -749,7 +749,9 @@ endif
 	@test -e unicorn_mode/unicornafl/build_python/libunicornafl.so && echo "[+] unicorn_mode successfully built" || echo "[-] unicorn_mode could not be built, it is optional, see unicorn_mode/README.md for what is needed"
   endif
 endif
+ifndef NO_VPMODE
 	@test -e vp_mode/avp64/build/avp64-runner -a -e vp_mode/harness/build/test_client -a -e vp_mode/avp64/build/ocx-qemu-arm/libocx-qemu-arm.so && echo "[+] vp_mode successfully built" || echo "[-] vp_mode could not be built, it is optional, see vp_mode/README.md for what is needed"
+endif	
 	@echo
 
 .PHONY: source-only

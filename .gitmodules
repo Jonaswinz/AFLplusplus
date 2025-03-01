@@ -27,4 +27,4 @@
 	url = https://github.com/nyx-fuzz/QEMU-Nyx
 [submodule "vp_mode/avp64"]
 	path = vp_mode/avp64
-	url = git@github.com:Jonaswinz/avp64.git
+	url = https://github.com/Jonaswinz/avp64.git
