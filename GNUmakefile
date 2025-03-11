@@ -750,7 +750,8 @@ endif
   endif
 endif
 ifndef NO_VPMODE
-	@test -e vp_mode/avp64/build/avp64-runner -a -e vp_mode/harness/build/test_client -a -e vp_mode/avp64/build/ocx-qemu-arm/libocx-qemu-arm.so && echo "[+] vp_mode successfully built" || echo "[-] vp_mode could not be built, it is optional, see vp_mode/README.md for what is needed"
+# Only checks for the harness, because its build the last that is build and depending the other files depend on the VP that is used. 
+	@test -e vp_mode/harness/build/harness && echo "[+] vp_mode successfully built" || echo "[-] vp_mode could not be built, it is optional, see vp_mode/README.md for what is needed"
 endif	
 	@echo
 
