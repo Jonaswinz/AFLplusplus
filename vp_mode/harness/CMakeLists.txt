@@ -43,19 +43,20 @@ if(INCLUDE_VP_HARNESS_PROFILER)
 
     file(COPY ${EASY_PROFILER_DIR}/bin/libeasy_profiler.so DESTINATION ${EASY_PROFILER_DIR}/lib)
 
-    # Add include directory for eas4y_profiler
-    target_include_directories(harness PRIVATE ${EASY_PROFILER_DIR}/include)
+    set(CMAKE_PREFIX_PATH "${EASY_PROFILER_DIR}/lib/cmake/easy_profiler;${CMAKE_PREFIX_PATH}")
 
-    # Add library paths and explicitly link the .so file
-    target_link_directories(harness PRIVATE ${EASY_PROFILER_DIR}/bin)
-    target_link_libraries(harness PRIVATE ${EASY_PROFILER_LIB})
+    find_package(easy_profiler REQUIRED)
+
+    target_link_libraries(harness easy_profiler rt vp-testing-interface)
 
     # Define compile-time flag
     target_compile_definitions(harness PRIVATE PROFILER_ENABLED)
-endif()
+else()
 
-# Link test_client with required libraries
-target_link_libraries(harness rt vp-testing-interface) 
+    # Link test_client with required libraries
+    target_link_libraries(harness rt vp-testing-interface) 
+
+endif()
 
 # After building the executable, make a copy with name "test_client" for compatibility with the old name.
 add_custom_command(TARGET harness POST_BUILD
