@@ -1,12 +1,16 @@
-<code style="color : red">This is a fork of the [AFLplusplus](https://github.com/AFLplusplus/AFLplusplus) project ...</code>
+> [!NOTE]  
+> This fork integrates AFL++ with a harness that connects the fuzzer with SystemC-based simulators.
+>
+> For more information on this, go to the [vp_mode folder](https://anonymous.4open.science/r/AFLplusplus-vp-mode/vp_mode/README.md) of this AFL++ project.
+> We tested the harness with three simulators, the proprietary SIM-A, the open source [AVP64](https://anonymous.4open.science/r/avp64-testing-interface/) and the open source [AVP32](https://anonymous.4open.science/r/avp32).
 
 # American Fuzzy Lop plus plus (AFL++)
 
 <img align="right" src="https://raw.githubusercontent.com/AFLplusplus/Website/main/static/aflpp_bg.svg" alt="AFL++ logo" width="250" height="250">
 
-Release version: [4.30c](https://github.com/AFLplusplus/AFLplusplus/releases)
+AFL++ release version: [4.21c](https://github.com/AFLplusplus/AFLplusplus/releases)
 
-GitHub version: 4.31a
+GitHub version: 4.22a
 
 Repository:
 [https://github.com/AFLplusplus/AFLplusplus](https://github.com/AFLplusplus/AFLplusplus)
@@ -89,34 +93,70 @@ To learn about fuzzing other targets, see:
 
 Step-by-step quick start:
 
-1. Compile the program or library to be fuzzed using `afl-cc`. A common way to
-   do this would be:
+1. Install AFL++ locally <br />
+   Install the dependencies (skip when on Alma8): <br />
+   ```
+   sudo apt-get update
+   sudo apt-get install -y build-essential python3-dev automake git flex bison libglib2.0-dev libpixman-1-dev python3-setuptools
+   sudo apt-get install -y lld-11 llvm-11 llvm-11-dev clang-11 || sudo apt-get install -y lld llvm llvm-dev clang 
+   sudo apt-get install -y gcc-$(gcc --version|head -n1|sed 's/.* //'|sed 's/\..*//')-plugin-dev libstdc++-$(gcc --version|head -n1|sed 's/.* //'|sed 's/\..*//')-dev
+   ```
+   Checkout and build AFL++ : <br />
+   ```
+   cd $HOME
+   git clone https://github.com/AFLplusplus/AFLplusplus && cd AFLplusplus
+   export LLVM_CONFIG="llvm-config-11"
+   make distrib
+   sudo make install
+   ```
+
+   On Alma8 you can build the project with:
+   ```
+   module load gcc/11.4.1
+   make all
+   ```
+
+2. Get a small but valid input file that makes sense to the program. 
+   In the case of the arch_pro example this could be for example 4 bin files with one string each (!= "pass")
+
+3. Set the following environmental variables: <br />
+   `HARNESS_PATH`: The path to the python interface <br />
+   `VP_PATH`: The global path to the simulator <br />
+   If you're working on a machine where you don't have sudo access, set to 1 `AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES` and `AFL_SKIP_CPUFREQ`
+
+4. Create and activate the virtual environment. 
+   Before running the code, make sure you have all the dependencies required installed (see requirements.txt).<br />
+   The virtual environment and the requirements are necessary to run the harness, whose process is spawned by AFL++.
+
+5. If you want to run AFL++ with usima, run `afl-fuzz` like so:
 
    ```
-   CC=/path/to/afl-cc CXX=/path/to/afl-c++ ./configure --disable-shared
-   make clean all
-   ```
-
-2. Get a small but valid input file that makes sense to the program. When
-   fuzzing verbose syntax (SQL, HTTP, etc.), create a dictionary as described in
-   [dictionaries/README.md](dictionaries/README.md), too.
-
-3. If the program reads from stdin, run `afl-fuzz` like so:
-
-   ```
-   ./afl-fuzz -i seeds_dir -o output_dir -- \
+   ./afl-fuzz -i /path/to/seeds_dir -o output_dir \
+   -m none -u -- \
    /path/to/tested/program [...program's cmdline...]
    ```
 
    To add a dictionary, add `-x /path/to/dictionary.txt` to afl-fuzz.
 
-   If the program takes input from a file, you can put `@@` in the program's
-   command line; AFL++ will put an auto-generated file name in there for you.
+   AFL++ will then start the harness which will in turn spawns the vp process.
 
-4. Investigate anything shown in red in the fuzzer UI by promptly consulting
+   A brief explanation of each option:
+  - *-i* indicates the directory where we have to put the input cases (a.k.a file examples)
+  - *-o* indicates the directory where AFL++ will store the mutated files
+  - *-s* indicates the static random seed to use
+
+  If you receive a message like *"Hmm, your system is configured to send core dump notifications to an external utility..."*, 
+  and you haven't set the variables `AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES` and `AFL_SKIP_CPUFREQ` just do:
+  ```
+  sudo su
+  echo core >/proc/sys/kernel/core_pattern
+  exit
+  ```
+
+6. Investigate anything shown in red in the fuzzer UI by promptly consulting
    [docs/afl-fuzz_approach.md#understanding-the-status-screen](docs/afl-fuzz_approach.md#understanding-the-status-screen).
 
-5. You will find found crashes and hangs in the subdirectories `crashes/` and
+7. You will find found crashes and hangs in the subdirectories `crashes/` and
    `hangs/` in the `-o output_dir` directory. You can replay the crashes by
    feeding them to the target, e.g. if your target is using stdin:
 
@@ -126,7 +166,7 @@ Step-by-step quick start:
 
    You can generate cores or use gdb directly to follow up the crashes.
 
-6. We cannot stress this enough - if you want to fuzz effectively, read the
+8. We cannot stress this enough - if you want to fuzz effectively, read the
    [docs/fuzzing_in_depth.md](docs/fuzzing_in_depth.md) document!
 
 ## Contact
