@@ -1,38 +1,67 @@
-AVP64_VERSION="$(cat ./AVP64_VERSION)"
+#!/bin/bash
+
+VP_VERSION_FILE="./VP_VERSION"
+VP_FOLDER="VPs"
 
 echo "================================================="
-echo "VP build script"
+echo "VP-Mode Build Script"
 echo "================================================="
 echo
 
 echo "[*] Performing basic sanity checks..."
 
-PLT=`uname -s`
+PLT=$(uname -s)
 
-#TODO test other distros
-#if [ ! "$PLT" = "Linux" ] && [ ! "$PLT" = "Darwin" ] && [ ! "$PLT" = "FreeBSD" ] && [ ! "$PLT" = "NetBSD" ] && [ ! "$PLT" = "OpenBSD" ] && [ ! "$PLT" = "DragonFly" ]; then
-if [ ! "$PLT" = "Linux" ]; then
-
+if [ "$PLT" != "Linux" ]; then
   echo "[-] Error: VP instrumentation is unsupported on $PLT."
   exit 1
-
 fi
 
-test -d ./avp64/.git || echo "[*] Cloning AVP64"; git clone --recursive https://github.com/Jonaswinz/avp64 avp64
+mkdir -p "$VP_FOLDER"
 
-test -e ./avp64/.git || { echo "[-] avp64 not checked out, please install git or check your internet connection." ; exit 1 ; }
+while IFS= read -r line || [ -n "$line" ]; do
+    # Skip empty or comment lines
+    [[ -z "$line" || "$line" == \#* ]] && continue
 
-cd "avp64" || exit 1
-echo "[*] Checking out $AVP64_VERSION"
-set +e
-sh -c 'git stash' 1>/dev/null 2>/dev/null
-git pull 1>/dev/null 2>/dev/null
-git checkout "$AVP64_VERSION" || echo Warning: could not check out to commit $AVP64_VERSION
-set -e
-cd "../"
+    # Sanitize line and parse values
+    line=$(echo "$line" | tr -d '\r' | xargs)
+    read -r repo ref name <<< "$line"
 
-echo "[+] Configuration complete."
+    if [[ -z "$repo" || -z "$ref" || -z "$name" ]]; then
+        echo "[!] Skipping malformed line: $line"
+        continue
+    fi
 
-echo "[*] Attempting to build avp64 and harness"
-make -j$(nproc) || exit 1
-echo "[+] Build process successful!"
+    TARGET_DIR="$VP_FOLDER/$name"
+
+    echo
+    echo "[*] Processing version: $name"
+    echo "    Repo: $repo"
+    echo "    Ref : $ref"
+    echo "    Path: $TARGET_DIR"
+
+    if [ -d "$TARGET_DIR/.git" ]; then
+        echo "[*] Repository already exists. Skipping clone and checkout."
+    else
+        echo "[*] Cloning repository into $TARGET_DIR ..."
+        git clone --recursive "$repo" "$TARGET_DIR" || { echo "[-] Clone failed!"; continue; }
+
+        cd "$TARGET_DIR" || { echo "[-] Failed to enter $TARGET_DIR"; continue; }
+
+        echo "[*] Checking out to $ref ..."
+        git checkout "$ref" || echo "[!] Warning: could not check out to $ref"
+
+        cd - >/dev/null
+    fi
+
+    echo "[+] Done setting up $name"
+done < "$VP_VERSION_FILE"
+
+echo
+echo "[*] Building all VPs ..."
+if ! make -j$(nproc); then
+  echo "[-] Build failed during make process."
+  exit 1
+fi
+
+echo "[✓] All builds completed successfully."

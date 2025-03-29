@@ -1,21 +1,30 @@
-.PHONY: all avp64 harness clean
+.PHONY: all vps harness clean
 
-all: avp64 harness
+VP_DIR := VPs
+VP_FOLDERS := $(wildcard $(VP_DIR)/*)
 
-avp64:
-	@echo "Building Avp64"
-	@cd avp64 && mkdir -p build && mkdir -p install && cd build && cmake -DCMAKE_INSTALL_PREFIX=../install .. && make && make install
+all: vps harness
+
+vps:
+	@for dir in $(VP_FOLDERS); do \
+		echo "Building $$dir..."; \
+		mkdir -p $$dir/build $$dir/install; \
+		cmake -S $$dir -B $$dir/build -DCMAKE_INSTALL_PREFIX=$$dir/install; \
+		$(MAKE) -C $$dir/build; \
+		$(MAKE) -C $$dir/build install; \
+	done
 
 harness:
-	@echo "Building Avp64 harness"
-	@cd harness && mkdir -p build && cd build && cmake .. && make
+	@echo "Building harness"
+	@mkdir -p harness/build
+	@cd harness/build && cmake .. && make
 
 clean:
-	@echo "Cleaning Avp64 build directory"
-	@if [ -d "avp64/build" ]; then cd avp64/build && make clean && cd ../..; fi
-	@echo "Cleaning Avp64 harness build directory"
+	@echo "Cleaning all VP builds"
+	@for dir in $(VP_FOLDERS); do \
+		if [ -d "$$dir/build" ]; then $(MAKE) -C $$dir/build clean; fi; \
+		rm -rf $$dir/build $$dir/install; \
+	done
+	@echo "Cleaning harness build"
 	@if [ -d "harness/build" ]; then cd harness/build && make clean && cd ../..; fi
-	@echo "Removing build directories"
-	@rm -rf avp64/build harness/build
-	@echo "Removing avp64 install directory"
-	@rm -rf avp64/install
+	@rm -rf harness/build

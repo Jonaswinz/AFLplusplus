@@ -1,0 +1,3 @@
+# Format: <repo_url> <ref> <folder_name>
+https://github.com/Jonaswinz/avp64 testing-interface avp64
+https://github.com/Jonaswinz/avp64 avp32-STM32F0 avp32
