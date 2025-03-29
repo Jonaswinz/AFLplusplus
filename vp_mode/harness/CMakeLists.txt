@@ -11,6 +11,7 @@ add_executable(harness
     ${src}/logger.cpp
     ${src}/vp_client.cpp
     ${src}/afl_client.cpp
+    ${src}/settings.cpp
     ${src}/main.cpp
 )
 

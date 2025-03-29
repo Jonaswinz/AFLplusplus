@@ -2471,7 +2471,7 @@ int main(int argc, char **argv_orig, char **envp) {
 
   } else if (afl->fsrv.vp_mode) {
 
-    afl->fsrv.target_path = alloc_printf("%s", getenv("TC_PATH"));
+    afl->fsrv.target_path = alloc_printf("%s", getenv("H_PATH"));
 
   } else {
 

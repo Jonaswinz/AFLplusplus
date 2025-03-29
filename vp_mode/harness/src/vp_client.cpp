@@ -62,6 +62,16 @@ bool vp_client::start_process(){
 
             // Args vector.
             std::vector<char*> argv;
+            
+            // Start GDB server for VP instance if enabled.
+            #ifdef VP_GDB_SERVER
+                std::string gdb_server = "gdbserver";
+                std::string gdb_arg1 = "--multi";
+                std::string gdb_port = ":5555";
+                argv.push_back(strdup(gdb_server.c_str()));
+                argv.push_back(strdup(gdb_arg1.c_str()));
+                argv.push_back(strdup(gdb_port.c_str()));
+            #endif
 
             // Add the name of the executable to the first argument.
             argv.push_back(strdup(m_vp_executable.c_str()));
@@ -128,7 +138,7 @@ void vp_client::kill_process(){
     LOG_MESSAGE(logger::INFO, "VP process killed.", vp_process);
 }
 
-void vp_client::restart_process(){
+void vp_client::restart_process(uint8_t fixed_read_count, fixed_read* fixed_reads, uint8_t interrupt_trigger_count, interrupt_trigger* interrupt_triggers, const char* error_symbol){
     //kill_vp();
     // TODO wait ?
     kill_process();
@@ -136,7 +146,7 @@ void vp_client::restart_process(){
 
     //TODO do not do bussy waiting !
     waiting_for_ready();
-    setup();
+    setup(fixed_read_count, fixed_reads, interrupt_trigger_count, interrupt_triggers, error_symbol);
 
     // TODO better logging: context of INSTANCE_RESTARTER!
     LOG_MESSAGE(logger::INFO, "Restart of VP process done!");
@@ -152,7 +162,7 @@ void vp_client::waiting_for_ready() {
     EASY_END_BLOCK
 }
 
-void vp_client::setup(){
+void vp_client::setup(uint8_t fixed_read_count, fixed_read* fixed_reads, uint8_t interrupt_trigger_count, interrupt_trigger* interrupt_triggers, const char* error_symbol){
     EASY_FUNCTION(profiler::colors::Magenta);
 
     LOG_MESSAGE(logger::INFO, "Setting up..");
@@ -177,9 +187,50 @@ void vp_client::setup(){
         // Sets the mode to only intercept read requests.
         req.data[16] = 1;
         vp_pipe_client->send_request(&req, &res);
+        free(req.data);
     EASY_END_BLOCK
 
-    // Freeing of req, res data not needed, because ther is none.
+    if(fixed_read_count > 0){
+        EASY_BLOCK("Set fixed reads");
+            req.request_command = testing::SET_FIXED_READ;
+            req.data_length = 1+fixed_read_count*9;
+            req.data = (char*)malloc(req.data_length);
+            req.data[0] = fixed_read_count;
+
+            for(int i=0; i<fixed_read_count; i++){
+                testing::testing_communication::int64_to_bytes(fixed_reads[i].address, req.data, 1+(i*9));
+                req.data[9+(i*9)] = fixed_reads[i].data;
+            }
+
+            vp_pipe_client->send_request(&req, &res);
+            free(req.data);
+        EASY_END_BLOCK
+    }
+
+    if(interrupt_trigger_count > 0){
+        for(int i=0; i<interrupt_trigger_count; i++){
+            EASY_BLOCK("Set interrupt trigger");
+                req.request_command = testing::SET_CPU_INTERRUPT_TRIGGER;
+                req.data_length = 16;
+                req.data = (char*)malloc(req.data_length);
+                testing::testing_communication::int64_to_bytes(interrupt_triggers[i].interrupt_address, req.data, 0);
+                testing::testing_communication::int64_to_bytes(interrupt_triggers[i].trigger_address, req.data, 8);
+                vp_pipe_client->send_request(&req, &res);
+                free(req.data);
+            EASY_END_BLOCK
+        }
+    }
+
+    if(error_symbol != ""){
+        EASY_BLOCK("Set interrupt trigger");
+            req.request_command = testing::SET_ERROR_SYMBOL;
+            req.data_length = strlen(error_symbol);
+            req.data = (char*)malloc(req.data_length);
+            strcpy(req.data, error_symbol);
+            vp_pipe_client->send_request(&req, &res);
+            free(req.data);
+        EASY_END_BLOCK
+    }
 
     LOG_MESSAGE(logger::INFO, "Setup done.");
 
@@ -210,7 +261,7 @@ void vp_client::write_code_coverage(int shm_id, unsigned int offset){
     free(res.data);
 }
 
-void vp_client::do_run(uint64_t address, std::string start_breakpoint, std::string end_breakpoint, std::string return_register, int shm_id, unsigned int offset){
+void vp_client::do_run(uint64_t address, std::string start_breakpoint, std::string end_breakpoint, std::string return_register, int shm_id, unsigned int offset, int mmio_length){
     EASY_FUNCTION(profiler::colors::Blue);
     
     LOG_MESSAGE(logger::INFO, "Requesting single run with start breakpoint %s to end breakpoint %s with MMIO data at %d.", start_breakpoint.c_str(), end_breakpoint.c_str(), shm_id);
@@ -222,20 +273,21 @@ void vp_client::do_run(uint64_t address, std::string start_breakpoint, std::stri
     EASY_BLOCK("Requesting single run");
         req.request_command = testing::DO_RUN_SHM;
 
-        req.data_length = 20+start_breakpoint.size()+end_breakpoint.size()+return_register.size();
+        req.data_length = 24+start_breakpoint.size()+end_breakpoint.size()+return_register.size();
         req.data = (char*)malloc(req.data_length);
 
         testing::testing_communication::int64_to_bytes(address, req.data, 0);
-        testing::testing_communication::int32_to_bytes((uint32_t)shm_id, req.data, 8);
-        testing::testing_communication::int32_to_bytes((uint32_t)offset, req.data, 12);
+        testing::testing_communication::int32_to_bytes((uint32_t)mmio_length, req.data, 8);
+        testing::testing_communication::int32_to_bytes((uint32_t)shm_id, req.data, 12);
+        testing::testing_communication::int32_to_bytes((uint32_t)offset, req.data, 16);
         // Stop reading the shared memory after string termination
-        req.data[16] = 1;
-        req.data[17] = start_breakpoint.size();
-        req.data[18] = end_breakpoint.size();
-        req.data[19] = return_register.size();
-        strcpy(req.data+20, start_breakpoint.c_str());
-        strcpy(req.data+20+start_breakpoint.size(), end_breakpoint.c_str());
-        strcpy(req.data+20+start_breakpoint.size()+end_breakpoint.size(), return_register.c_str());
+        req.data[20] = 1;
+        req.data[21] = start_breakpoint.size();
+        req.data[22] = end_breakpoint.size();
+        req.data[23] = return_register.size();
+        strcpy(req.data+24, start_breakpoint.c_str());
+        strcpy(req.data+24+start_breakpoint.size(), end_breakpoint.c_str());
+        strcpy(req.data+24+start_breakpoint.size()+end_breakpoint.size(), return_register.c_str());
 
         vp_pipe_client->send_request(&req, &res);
     EASY_END_BLOCK

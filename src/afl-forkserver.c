@@ -1577,7 +1577,6 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
            "tips.\n",
            stringify_mem_size(val_buf, sizeof(val_buf), fsrv->mem_limit << 20),
            fsrv->mem_limit - 1);
-
     }
 
     FATAL("Fork server crashed with signal %d", WTERMSIG(status));
@@ -1600,6 +1599,15 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
          "    you have a restrictive memory limit configured, this is "
          "expected; please\n"
          "    run with '-m 0'.\n");
+
+  } else if (fsrv->vp_mode){
+
+    SAYF("\n" cLRD "[-] " cRST
+      "Hmm, looks like the harness terminated before we could complete a\n"
+      "handshake. Since you are using the vp-mode (-v) try to enable logging \n"
+      "and look for errors: \n"
+      "    - Set H_LOGGING=1 and H_LOGGING_PATH=h_out.txt \n"
+      "    - Set H_VP_LOGGING=1 and H_VP_LOGGING_PATH=vp_out.txt \n");
 
   } else if (!fsrv->mem_limit) {
 

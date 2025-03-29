@@ -1,6 +1,9 @@
 #include "logger.h"
 #include "afl_client.h"
 #include "vp_client.h"
+#include "settings.h"
+
+//#undef AFL_MODE
 
 int main(int argc, char* argv[]) {
     // Start profiler
@@ -11,9 +14,9 @@ int main(int argc, char* argv[]) {
 
         EASY_BLOCK("Setup");
 
-            //Enable logging if env is set (TC_LOGGING="1" and TC_LOGGING_PATH to a path)
-            const char* logging = std::getenv("TC_LOGGING");
-            const char* logging_path = std::getenv("TC_LOGGING_PATH");
+            //Enable logging if env is set (H_LOGGING="1" and H_LOGGING_PATH to a path)
+            const char* logging = std::getenv("H_LOGGING");
+            const char* logging_path = std::getenv("H_LOGGING_PATH");
             int logLevel = 0;
 
             if(logging != nullptr){
@@ -21,17 +24,24 @@ int main(int argc, char* argv[]) {
                 try{
                     logLevel = std::stoi(logging);
                 }catch(std::exception &e){
-                    //TODO log with println here ?
                     return 1;
                 }
 
                 if(logLevel > 0 && logging_path){
                     logger::init(logging_path, (logger::log_level)logLevel);
+                    LOG_MESSAGE(logger::WARNING, "--------------------------------------------");
+                    LOG_MESSAGE(logger::WARNING, "\\ \\   / /  _ \\     |  \\/  | ___   __| | ___ ");
+                    LOG_MESSAGE(logger::WARNING, " \\ \\ / /| |_| |____| |\\/| |/ _ \\ / _` |/ _ \\");
+                    LOG_MESSAGE(logger::WARNING, "  \\ V / |  __/_____| |  | | |_| | |_| |  __/");
+                    LOG_MESSAGE(logger::WARNING, "   \\_/  |_|        |_|  |_|\\___/ \\__,_|\\___|");
                     LOG_MESSAGE(logger::WARNING, "LOGGING ENABLED!");
                 }
             }
-            
-            // Check required parameters
+
+            // Load ENV settings.
+            settings::load();
+
+            // Check parameters
             if (argc != 6) {
                 LOG_MESSAGE(logger::ERROR, "Wrong parameters!");
                 return 1;
@@ -76,156 +86,52 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
 
-            //Check settings from environment variables
-            const char* vp_executable = std::getenv("TC_VP_EXECUTABLE");
-            if(vp_executable){
-                LOG_MESSAGE(logger::INFO, "VP executable (TC_VP_EXECUTABLE): %s", vp_executable);
-            }else{
-                LOG_MESSAGE(logger::ERROR, "TC_VP_EXECUTABLE envirnoment variable not set!");
-                return 1;
-            }
+            // Loading settings and parameters done.
 
-            const char* vp_launch_args = std::getenv("TC_VP_LAUNCH_ARGS");
-            if(vp_launch_args){
-                LOG_MESSAGE(logger::INFO, "VP launch args (TC_VP_LAUNCH_ARGS): %s", vp_launch_args);
-            }else{
-                vp_launch_args = "";
-            }
-
-            const char* vp_logging = std::getenv("TC_VP_LOGGING");
-            const char* vp_logging_path = std::getenv("TC_VP_LOGGING_PATH");
-            int vp_loglevel = 0;
- 
-            if(vp_logging){
-
-                try{
-                    vp_loglevel = std::stoi(vp_logging);
-                }catch(std::exception &e){
-                    LOG_MESSAGE(logger::ERROR, "Could not parse value of TC_VP_LOGGING! Logging disabled.");
-                }
-
-                if(vp_loglevel > 0 && logging_path){
-                    LOG_MESSAGE(logger::INFO, "VP logging path (TC_VP_LOGGING_PATH): %s", vp_logging_path);
-                }else{
-                    LOG_MESSAGE(logger::ERROR, "TC_VP_LOGGING_PATH envirnoment variable not set, but TC_VP_LOGGING enabled! Disabling VP logging.");
-                    vp_loglevel = 0;
-                    vp_logging_path = "";
-                }
-
-            }else{
-                vp_logging_path = "";
-            }
-
-            const char* kill_old = std::getenv("TC_KILL_OLD");
-            if(kill_old && strcmp(kill_old, "1") == 0){
-                LOG_MESSAGE(logger::INFO, "Killing old processes (TC_KILL_OLD) enabled.");
+            // Kill old
+            if(settings::kill_old){
+                LOG_MESSAGE(logger::INFO, "Killing old processes (H_KILL_OLD) enabled.");
                 
-                std::string command = "killall "+std::string(vp_executable);
+                std::string command = "killall "+std::string(settings::vp_executable);
                 int ret = system(command.c_str());
-                if (ret == -1) LOG_MESSAGE(logger::ERROR, "Error occoured while trying to killall %d. Continuing.", vp_executable);
+                if (ret == -1) LOG_MESSAGE(logger::ERROR, "Error occoured while trying to killall %d. Continuing.", settings::vp_executable);
 
                 ret = system("killall --older-than 5s " OWN_NAME);
-                if (ret == -1) LOG_MESSAGE(logger::ERROR, "Error occoured while trying to killall %d. Continuing.", vp_executable);
+                if (ret == -1) LOG_MESSAGE(logger::ERROR, "Error occoured while trying to killall %d. Continuing.", settings::vp_executable);
             }
 
-            //TODO check after killing! Or do it multiple times
-            //TODO fedback to afl about errors
-
-            const char* mode_str = std::getenv("TC_MODE");
-            int mode = 0;
-            if(mode_str){
-                try{
-                    mode = std::stoi(mode_str);
-                    LOG_MESSAGE(logger::INFO, "Test client mode (TC_MODE) set to: %d", mode);
-                }catch(std::exception &e){
-                    LOG_MESSAGE(logger::ERROR, "Could not parse value of TC_MODE!");
-                    return 1;
-                }
-            }else{
-                LOG_MESSAGE(logger::ERROR, "TC_MODE envirnoment variable not set, but is required!");
-                return 1;
-            }
-
-            const char* vp_instances_str = std::getenv("TC_VP_INSTANCES");
-            int vp_instances = 1;
-            if(vp_instances_str){
-                try{
-                    vp_instances = std::stoi(vp_instances_str);
-                    LOG_MESSAGE(logger::INFO, "Number of VP instances (TC_VP_INSTANCES) set to: %d", vp_instances);
-                }catch(std::exception &e){
-                    LOG_MESSAGE(logger::ERROR, "Could not parse value of TC_VP_INSTANCES! Set to defaut: 1.");
-                    vp_instances = 1;
-                }
-            }
-
-            const char* start_symbol = std::getenv("TC_START_SYMBOL");
-            if(start_symbol){
-                LOG_MESSAGE(logger::INFO, "Start symbol (TC_START_SYMBOL): %s", start_symbol);
-            }else{
-                LOG_MESSAGE(logger::ERROR, "TC_START_SYMBOL envirnoment variable not set!");
-                return 1;
-            }
-
-            const char* end_symbol = std::getenv("TC_END_SYMBOL");
-            if(end_symbol){
-                LOG_MESSAGE(logger::INFO, "End symbol (TC_END_SYMBOL): %s", end_symbol);
-            }else{
-                LOG_MESSAGE(logger::ERROR, "TC_END_SYMBOL envirnoment variable not set!");
-                return 1;
-            }
-
-            const char* return_register = std::getenv("TC_RETURN_REGISTER");
-            if(return_register){
-                LOG_MESSAGE(logger::INFO, "Return register (TC_RETURN_REGISTER): %s", return_register);
-            }else{
-                LOG_MESSAGE(logger::ERROR, "TC_RETURN_REGISTER envirnoment variable not set!");
-                return 1;
-            }
-
-            const char* mmio_data_address_str = std::getenv("TC_MMIO_DATA_ADDRESS");
-            int mmio_data_address = 0;
-            if(mmio_data_address_str){
-                try{
-                    mmio_data_address = std::stoul(mmio_data_address_str, nullptr, 16);
-                    LOG_MESSAGE(logger::INFO, "MMIO data address (TC_MMIO_DATA_ADDRESS) set to: %d", mmio_data_address);
-                }catch(std::exception &e){
-                    LOG_MESSAGE(logger::ERROR, "Could not parse value of TC_MMIO_DATA_ADDRESS!");
-                    return 1;
-                }
-            }else{
-                LOG_MESSAGE(logger::ERROR, "TC_MMIO_DATA_ADDRESS envirnoment variable not set, but is required!");
-                return 1;
-            }
-
-            afl_client m_afl_client = afl_client(mode, vp_instances, vp_executable, vp_launch_args, target_path, vp_loglevel, vp_logging_path, st_fd, ctl_fd);
+            afl_client m_afl_client = afl_client(st_fd, ctl_fd);
 
             // Set termination signal handler
             std::signal(SIGTERM, afl_client::signal_handler);
 
         EASY_END_BLOCK
         
-
-        m_afl_client.start(mmio_data_address, start_symbol, end_symbol, return_register, shm_cov, shm_input);
+        LOG_MESSAGE(logger::WARNING, "Setup Done!");
+        LOG_MESSAGE(logger::WARNING, "--------------------------------------------");
+        
+        m_afl_client.start(target_path, shm_cov, shm_input);
 
     // Not AFL mode just does one simple run in avp64
     #else
 
-        logger::init("tc_out.txt", logger::ALL);
+        logger::init("H_out.txt", logger::ALL);
 
         LOG_MESSAGE(logger::INFO, "Run manual.");
 
-        vp_client vp_client = vp_client();
-        vp_client.waitingForReady();
-        vp_client.setup();
+        vp_client m_vp_client = vp_client("/scratch/winzer/3/AFLplusplus/vp_mode/avp64/install/bin/avp64-runner", 1, "vp_out.txt", "-f", "/scratch/winzer/avp64-testing/benchmark/cortex-M0/arduino_json/arduino_json.cfg", 1073821732, 1073821732);
+        m_vp_client.start_process();
+        m_vp_client.waiting_for_ready();
+        m_vp_client.setup();
         
         //vp_client.run("pasw", true);
         //vp_client.run("pass", false);
         //vp_client.kill();
 
         //TODO fix (with shared memory)
-        vp_client.run_single("main", "exit", "pass");
-        vp_client.write_code_coverage(12345);
-        vp_client.kill();
+        //m_vp_client.run_single("main", "exit", "pass");
+        //m_vp_client.write_code_coverage(12345);
+        //m_vp_client.kill();
 
         #ifdef PROFILER_ENABLED
             LOG_MESSAGE(logger::INFO, "Writing profiling file.");

@@ -39,7 +39,8 @@
 #define PROFILING_COUNT 15
 #define AFL_MODE
 #define OWN_NAME "test_client"
-#define MAX_VP_INSTANCES 20
+#define MAX_VP_INSTANCES 40
+//#define VP_GDB_SERVER
 // End Settings
 
 // Data to enable shared memory fuzzing for AFLplusplus

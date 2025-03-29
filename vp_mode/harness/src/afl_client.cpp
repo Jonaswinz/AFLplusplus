@@ -1,32 +1,23 @@
 #include "afl_client.h"
 
-afl_client::afl_client(int mode, int vp_instances, std::string vp_executable, std::string vp_launch_args, std::string target_path, int vp_loglevel, std::string vp_logging_path, int fksrv_st_fd, int fksrv_ctl_fd){
-    m_mode = mode;
+afl_client::afl_client(int fksrv_st_fd, int fksrv_ctl_fd){
 
     // 0: Restarting mode, 1: Persistent mode
-    if(m_mode == 0){
-        if(vp_instances > MAX_VP_INSTANCES){
+    if(settings::mode == 0){
+        if(settings::vp_instances > MAX_VP_INSTANCES){
             LOG_MESSAGE(logger::ERROR, "More than %d instances are not supported yet.", MAX_VP_INSTANCES);
-            // TODO differently
             exit(1);
         }
-        m_vp_clients_count = vp_instances;
 
-    }else if(m_mode == 1){
-        m_vp_clients_count = 1;
+    }else if(settings::mode == 1){
+        settings::vp_instances = 1;
 
     }else{
 
-        LOG_MESSAGE(logger::ERROR, "Mode %d not supported!", mode);
-        // TODO differently
+        LOG_MESSAGE(logger::ERROR, "Mode %d not supported!", settings::mode);
         exit(1);
     }
     
-    m_vp_executable = vp_executable;
-    m_vp_launch_args = vp_launch_args;
-    m_target_path = target_path;
-    m_vp_loglevel = vp_loglevel;
-    m_vp_logging_path = vp_logging_path;
     m_fksrv_st_fd = fksrv_st_fd;
     m_fksrv_ctl_fd = fksrv_ctl_fd;
 
@@ -64,34 +55,37 @@ void afl_client::instance_restarter(int core_id, vp_client** clients_pointer, in
                 lock.unlock();
 
                 LOG_MESSAGE(logger::INFO, "INSTANCE_RESTARTER: Restarting instance %d.", i);
-                clients_pointer[i]->restart_process();
+                clients_pointer[i]->restart_process(settings::fixed_reads.size(), settings::fixed_reads.data(), settings::interrupt_triggers.size(), settings::interrupt_triggers.data(), settings::error_symbol);
                 LOG_MESSAGE(logger::INFO, "INSTANCE_RESTARTER: Done restarting %d.", i);
             }
         }
     }
 }
 
-void afl_client::start(uint64_t mmio_address, std::string start_breakpoint, std::string end_breakpoint, std::string return_code_register,  int shm_cov_id, int shm_input_id) {
+void afl_client::start(const char* m_target_path, int shm_cov_id, int shm_input_id) {
 
     // TODO logging seperation of different processes
 
     // Start the vp clients and processes after another the frist time.
-    for(int i=0; i<m_vp_clients_count; i++){
+    for(int i=0; i<settings::vp_instances; i++){
         // Using mmio_address ass the start and end address of the mmio tracking (because we are only interested in this specific address).
-        m_vp_clients[i] = new vp_client(m_vp_executable, m_vp_loglevel, m_vp_logging_path, m_vp_launch_args, m_target_path, mmio_address, mmio_address);
+        m_vp_clients[i] = new vp_client(settings::vp_executable, settings::vp_log_level, settings::vp_logging_path, settings::vp_launch_args, m_target_path, settings::run_mmio_data_address, settings::run_mmio_data_address);
         m_vp_clients[i]->start_process();
         m_vp_clients[i]->waiting_for_ready();
-        m_vp_clients[i]->setup();
+        m_vp_clients[i]->setup(settings::fixed_reads.size(), settings::fixed_reads.data(), settings::interrupt_triggers.size(), settings::interrupt_triggers.data(), settings::error_symbol);
     }
 
     // TODO only in not persistent / snapshotting mode!
     // TODO restart with only one instance do in the same thread and not instance restarter !?
     
     // The instance restarter will now take care of the restarting, but only when more that one vp client instance is used.
-    if (m_vp_clients_count > 1){
-        std::thread([=]() {
-            instance_restarter(10, m_vp_clients, m_vp_clients_count);
-        }).detach();
+    if (settings::vp_instances > 1){
+        for(int i=0; i<settings::vp_instance_restarter; i++){
+            int selected_core = (sched_getcpu() + i) % get_nprocs(); // This core + i % max cores.
+            std::thread([=]() {
+                instance_restarter(10, m_vp_clients, settings::vp_instances);
+            }).detach();
+        }
     }
 
     m_shm_cov_id = shm_cov_id;
@@ -161,8 +155,9 @@ void afl_client::start(uint64_t mmio_address, std::string start_breakpoint, std:
                 exit(1);
             }
         EASY_END_BLOCK
-
-        m_vp_clients[m_vp_clients_index]->do_run(mmio_address, start_breakpoint, end_breakpoint, return_code_register, shm_input_id, 4);
+        
+        // Offset 4 due to the layout of AFL++ shared memory region.
+        m_vp_clients[m_vp_clients_index]->do_run(settings::run_mmio_data_address, settings::run_start_symbol, settings::run_end_symbol, settings::run_return_register, shm_input_id, 4, settings::run_mmio_data_length);
         m_vp_clients[m_vp_clients_index]->get_return_code();
 
 
@@ -182,17 +177,17 @@ void afl_client::start(uint64_t mmio_address, std::string start_breakpoint, std:
 
 
         // Only restart whole VP process if restarting mode is enabled.
-        if(m_mode == 0){
+        if(settings::mode == 0){
 
             LOG_MESSAGE(logger::INFO, "Moving to next instance!");
 
             m_vp_clients[m_vp_clients_index]->vp_process_state = vp_client::DONE;
             
             // If more than one vp instance is used, the instance restarter thread will do the restarting, so we just need to select one ready instance.
-            if(m_vp_clients_count > 1){
+            if(settings::vp_instances > 1){
                 // Bussy searching for an instance where the VP process state is READY and thus it can be used!
                 while(true){
-                    m_vp_clients_index = (m_vp_clients_index + 1) % m_vp_clients_count;
+                    m_vp_clients_index = (m_vp_clients_index + 1) % settings::vp_instances;
 
                     std::unique_lock<std::mutex> lock(restarter_mutex);
                     if(m_vp_clients[m_vp_clients_index]->vp_process_state == vp_client::READY) break;
@@ -200,7 +195,7 @@ void afl_client::start(uint64_t mmio_address, std::string start_breakpoint, std:
                 }
             }else{
                 // If only one instance is used, do the restarting here, because there is no instance restarter thread.
-                m_vp_clients[m_vp_clients_index]->restart_process();
+                m_vp_clients[m_vp_clients_index]->restart_process(settings::fixed_reads.size(), settings::fixed_reads.data(), settings::interrupt_triggers.size(), settings::interrupt_triggers.data(), settings::error_symbol);
             }
         }
 
@@ -221,7 +216,7 @@ void afl_client::start(uint64_t mmio_address, std::string start_breakpoint, std:
 
 void afl_client::shutdown(){
     //TODO SIGTERM or SIGKILL ?
-    for(int i=0; i<m_vp_clients_count; i++){
+    for(int i=0; i<settings::vp_instances; i++){
         m_vp_clients[i]->kill_process();
     }
 }

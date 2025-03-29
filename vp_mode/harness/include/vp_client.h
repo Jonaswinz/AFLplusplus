@@ -14,6 +14,18 @@ class vp_client{
             NOT_EXISTING, STARTING, STARTED, READY, DONE, KILLING, KILLED
         };
 
+        // Structure of a fixed read.
+        struct fixed_read{
+            uint64_t address;
+            char data;
+        };
+
+        // Structure of a interrupt trigger.
+        struct interrupt_trigger{
+            uint64_t interrupt_address;
+            uint64_t trigger_address;
+        };
+
         // Testing client from the vp-testing-interface for the current process
         testing::pipe_testing_client* vp_pipe_client;
 
@@ -34,19 +46,19 @@ class vp_client{
         void kill_process();
 
         // Restarting the VP process.
-        void restart_process();
+        void restart_process(uint8_t fixed_read_count, fixed_read* fixed_reads, uint8_t interrupt_trigger_count, interrupt_trigger* interrupt_triggers, const char* error_symbol);
 
         // Waits for the VP to be ready.
         void waiting_for_ready();
 
         // Setups the VP for fuzzing with MMIO interception and code coverage tracking.
-        void setup();
+        void setup(uint8_t fixed_read_count, fixed_read* fixed_reads, uint8_t interrupt_trigger_count, interrupt_trigger* interrupt_triggers, const char* error_symbol);
 
         // Requests the VP to write the code coverage to a shared memory region.
         void write_code_coverage(int shm_id, unsigned int offset);
 
         // Requests one run of the VP with a test case.
-        void do_run(uint64_t address, std::string start_breakpoint, std::string end_breakpoint, std::string return_register, int shm_id, unsigned int offset);
+        void do_run(uint64_t address, std::string start_breakpoint, std::string end_breakpoint, std::string return_register, int shm_id, unsigned int offset, int mmio_length);
 
         // Getting the return code from the VP. The return code was recoreded during the do_run function.
         void get_return_code();
