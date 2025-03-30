@@ -24,9 +24,11 @@ class afl_client{
         // Starts the forkserver client.
         void start(const char* m_target_path, int shm_cov_id, int shm_input_id);
 
-        void shutdown();
+        static void shutdown();
         
         static void signal_handler(int sig);
+
+        static void on_child_exit(int sig);
 
     private:
         

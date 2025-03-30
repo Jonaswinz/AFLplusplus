@@ -2023,28 +2023,39 @@ fsrv_run_result_t __attribute__((hot)) afl_fsrv_run_target(
   if (!exec_ms) {
 
     if (*stop_soon_p) { return 0; }
-    SAYF("\n" cLRD "[-] " cRST
-         "Unable to communicate with fork server. Some possible reasons:\n\n"
-         "    - You've run out of memory. Use -m to increase the the memory "
-         "limit\n"
-         "      to something higher than %llu.\n"
-         "    - The binary or one of the libraries it uses manages to "
-         "create\n"
-         "      threads before the forkserver initializes.\n"
-         "    - The binary, at least in some circumstances, exits in a way "
-         "that\n"
-         "      also kills the parent process - raise() could be the "
-         "culprit.\n"
-         "    - If using persistent mode with QEMU, "
-         "AFL_QEMU_PERSISTENT_ADDR "
-         "is\n"
-         "      probably not valid (hint: add the base address in case of "
-         "PIE)"
-         "\n\n"
-         "If all else fails you can disable the fork server via "
-         "AFL_NO_FORKSRV=1.\n",
-         fsrv->mem_limit);
-    RPFATAL(res, "Unable to communicate with fork server");
+
+    if(fsrv->vp_mode){
+        SAYF("\n" cLRD "[-] " cRST
+          "Unable to communicate with the harness. You are using the vp-mode (-v)\n"
+          "and it seems that the harness crashed or exited. This can have multiple reasons. \n"
+          "Try to enable logging and look for errors: \n"
+          "    - Set H_LOGGING=1 and H_LOGGING_PATH=h_out.txt \n"
+          "    - Set H_VP_LOGGING=1 and H_VP_LOGGING_PATH=vp_out.txt \n");
+        RPFATAL(res, "Unable to communicate with the harness");
+    }else{
+      SAYF("\n" cLRD "[-] " cRST
+          "Unable to communicate with fork server. Some possible reasons:\n\n"
+          "    - You've run out of memory. Use -m to increase the the memory "
+          "limit\n"
+          "      to something higher than %llu.\n"
+          "    - The binary or one of the libraries it uses manages to "
+          "create\n"
+          "      threads before the forkserver initializes.\n"
+          "    - The binary, at least in some circumstances, exits in a way "
+          "that\n"
+          "      also kills the parent process - raise() could be the "
+          "culprit.\n"
+          "    - If using persistent mode with QEMU, "
+          "AFL_QEMU_PERSISTENT_ADDR "
+          "is\n"
+          "      probably not valid (hint: add the base address in case of "
+          "PIE)"
+          "\n\n"
+          "If all else fails you can disable the fork server via "
+          "AFL_NO_FORKSRV=1.\n",
+          fsrv->mem_limit);
+        RPFATAL(res, "Unable to communicate with fork server");
+    }
 
   }
 

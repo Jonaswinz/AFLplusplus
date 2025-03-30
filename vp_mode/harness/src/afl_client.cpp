@@ -74,9 +74,6 @@ void afl_client::start(const char* m_target_path, int shm_cov_id, int shm_input_
         m_vp_clients[i]->waiting_for_ready();
         m_vp_clients[i]->setup(settings::fixed_reads.size(), settings::fixed_reads.data(), settings::interrupt_triggers.size(), settings::interrupt_triggers.data(), settings::error_symbol);
     }
-
-    // TODO only in not persistent / snapshotting mode!
-    // TODO restart with only one instance do in the same thread and not instance restarter !?
     
     // The instance restarter will now take care of the restarting, but only when more that one vp client instance is used.
     if (settings::vp_instances > 1){
@@ -121,7 +118,6 @@ void afl_client::start(const char* m_target_path, int shm_cov_id, int shm_input_
 
         LOG_MESSAGE(logger::INFO, "Using instance %d.", m_vp_clients_index);
 
-        // TODO: dont know for what this is for !?
         int child_killed;
         if (read(m_fksrv_ctl_fd, &child_killed, sizeof(child_killed)) != sizeof(child_killed)) {
             LOG_MESSAGE(logger::ERROR, "AFL parent exited before we could fork.");
@@ -131,18 +127,17 @@ void afl_client::start(const char* m_target_path, int shm_cov_id, int shm_input_
 
         LOG_MESSAGE(logger::INFO, "Child Killed: %d", child_killed);
 
+        // TODO: neccessary ? just triggeres sometimes and thus the harness kills itself.
+        /*
         if (child_killed > 0) {
             
-            //TODO: recessary ?
-            /*
             int status;
             waitpid(-1, &status, WNOHANG); // Simplified waiting
-            status = swapEndian(status);
             write(m_fksrv_st_fd, &status, sizeof(status));
-            kill();
+            shutdown();
             exit(1);
-            */
         }
+        */
 
         EASY_BLOCK("Communicate child ID");
 
@@ -215,22 +210,45 @@ void afl_client::start(const char* m_target_path, int shm_cov_id, int shm_input_
 }
 
 void afl_client::shutdown(){
-    //TODO SIGTERM or SIGKILL ?
-    for(int i=0; i<settings::vp_instances; i++){
-        m_vp_clients[i]->kill_process();
+    LOG_MESSAGE(logger::WARNING, "Shutting Down!");
+
+    if(instance != nullptr){
+        for(int i=0; i<settings::vp_instances; i++){
+            instance->m_vp_clients[i]->kill_process();
+        }
     }
+
+    exit(0);
 }
 
 void afl_client::signal_handler(int sig) {
     // Handle SIGTERM or other signals as needed
     LOG_MESSAGE(logger::ERROR, "Terminating on signal %d", sig);
 
-    // killing current vp instance
-    if(instance != nullptr){
-        instance->shutdown();
-    }
+    shutdown();
+}
 
-    exit(0);
+void afl_client::on_child_exit(int signum){
+    int status;
+    pid_t pid;
+
+    LOG_MESSAGE(logger::ERROR, "VP process exited!");
+
+    // Wait for any child (non-blocking)
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        if (WIFSIGNALED(status)) {
+            LOG_MESSAGE(logger::ERROR, "Child %d crashed with signal %d (%d).", pid, WTERMSIG(status), strsignal(WTERMSIG(status)));
+        } else if (WIFEXITED(status)) {
+            LOG_MESSAGE(logger::ERROR, "Child %d exited with signal %d.", pid, WEXITSTATUS(status));
+        }
+
+        for(int i=0; i<settings::vp_instances; i++){
+            if(instance->m_vp_clients[i]->vp_process == pid){
+                LOG_MESSAGE(logger::INFO, "Restarting process of instance %d", i);
+                instance->m_vp_clients[i]->restart_process(settings::fixed_reads.size(), settings::fixed_reads.data(), settings::interrupt_triggers.size(), settings::interrupt_triggers.data(), settings::error_symbol);
+            }
+        }
+    }
 }
 
 afl_client* afl_client::instance = nullptr;

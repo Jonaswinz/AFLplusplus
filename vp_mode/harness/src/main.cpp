@@ -104,6 +104,16 @@ int main(int argc, char* argv[]) {
 
             // Set termination signal handler
             std::signal(SIGTERM, afl_client::signal_handler);
+            std::signal(SIGINT, afl_client::signal_handler);
+            std::signal(SIGKILL, afl_client::signal_handler);
+
+            // Child process exit handler
+            struct sigaction sa {};
+            sa.sa_handler = afl_client::on_child_exit;
+            sigemptyset(&sa.sa_mask);
+            // This setting will terminate current pipe blocking reads and thus the request will be sent again, but to a new process.
+            sa.sa_flags = 0;
+            sigaction(SIGCHLD, &sa, nullptr);
 
         EASY_END_BLOCK
         

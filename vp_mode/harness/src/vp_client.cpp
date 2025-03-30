@@ -1,4 +1,5 @@
 #include "vp_client.h"
+#include "afl_client.h"
 
 vp_client::vp_client(std::string vp_executable, int vp_loglevel, std::string vp_logging_path, std::string vp_launch_args, std::string target_path, uint64_t mmio_start_address, uint64_t mmio_end_address){
 
@@ -82,10 +83,8 @@ bool vp_client::start_process(){
                 argv.push_back(strdup(log_errors_only.c_str()));
             }
 
-            // TODO into ENV ?
             std::string full_launch_args = " --enable-test-receiver --test-receiver-interface 1 --test-receiver-pipe-request "+std::to_string(vp_pipe_client->get_request_fd())+" --test-receiver-pipe-response "+std::to_string(vp_pipe_client->get_response_fd())+" "+m_vp_launch_args;
 
-            // TODO 
             std::istringstream iss(full_launch_args);
             std::string token;
             while (iss >> token) {
@@ -157,8 +156,7 @@ void vp_client::waiting_for_ready() {
 
     EASY_BLOCK("Waiting for VP ready message");
         LOG_MESSAGE(logger::INFO, "Waiting for ready message.");
-        //TODO check for error (return bool!) also with the others!
-        vp_pipe_client->wait_for_ready();
+        if(!vp_pipe_client->wait_for_ready()) afl_client::shutdown();
     EASY_END_BLOCK
 }
 
@@ -174,7 +172,7 @@ void vp_client::setup(uint8_t fixed_read_count, fixed_read* fixed_reads, uint8_t
     EASY_BLOCK("Enable code coverage tracking");
         req.request_command = testing::ENABLE_CODE_COVERAGE;
         req.data_length = 0;
-        vp_pipe_client->send_request(&req, &res);
+        if(!vp_pipe_client->send_request(&req, &res)) afl_client::shutdown();
     EASY_END_BLOCK
 
     // Sends the ENABLE_MMIO_TRACKING command to the VP with the start and end address specified in envs.
@@ -186,7 +184,10 @@ void vp_client::setup(uint8_t fixed_read_count, fixed_read* fixed_reads, uint8_t
         testing::testing_communication::int64_to_bytes(m_mmio_end_address, req.data, 8);
         // Sets the mode to only intercept read requests.
         req.data[16] = 1;
-        vp_pipe_client->send_request(&req, &res);
+        if(!vp_pipe_client->send_request(&req, &res)){
+            free(req.data);
+            afl_client::shutdown();
+        }
         free(req.data);
     EASY_END_BLOCK
 
@@ -202,7 +203,10 @@ void vp_client::setup(uint8_t fixed_read_count, fixed_read* fixed_reads, uint8_t
                 req.data[9+(i*9)] = fixed_reads[i].data;
             }
 
-            vp_pipe_client->send_request(&req, &res);
+            if(!vp_pipe_client->send_request(&req, &res)){
+                free(req.data);
+                afl_client::shutdown();
+            }
             free(req.data);
         EASY_END_BLOCK
     }
@@ -215,20 +219,24 @@ void vp_client::setup(uint8_t fixed_read_count, fixed_read* fixed_reads, uint8_t
                 req.data = (char*)malloc(req.data_length);
                 testing::testing_communication::int64_to_bytes(interrupt_triggers[i].interrupt_address, req.data, 0);
                 testing::testing_communication::int64_to_bytes(interrupt_triggers[i].trigger_address, req.data, 8);
-                vp_pipe_client->send_request(&req, &res);
-                free(req.data);
+                if(!vp_pipe_client->send_request(&req, &res)){
+                    free(req.data);
+                    afl_client::shutdown();
+                }
             EASY_END_BLOCK
         }
     }
 
-    if(error_symbol != ""){
+    if(strlen(error_symbol)>0){
         EASY_BLOCK("Set interrupt trigger");
             req.request_command = testing::SET_ERROR_SYMBOL;
             req.data_length = strlen(error_symbol);
             req.data = (char*)malloc(req.data_length);
             strcpy(req.data, error_symbol);
-            vp_pipe_client->send_request(&req, &res);
-            free(req.data);
+            if(!vp_pipe_client->send_request(&req, &res)){
+                free(req.data);
+                afl_client::shutdown();
+            }
         EASY_END_BLOCK
     }
 
@@ -253,7 +261,10 @@ void vp_client::write_code_coverage(int shm_id, unsigned int offset){
         req.data = (char*)malloc(req.data_length);
         testing::testing_communication::int32_to_bytes((uint32_t)shm_id, req.data, 0);
         testing::testing_communication::int32_to_bytes((uint32_t)offset, req.data, 4);
-        vp_pipe_client->send_request(&req, &res);
+        if(!vp_pipe_client->send_request(&req, &res)){
+            free(req.data);
+            afl_client::shutdown();
+        }
     EASY_END_BLOCK
 
     // Freeing req and res data.
@@ -289,7 +300,14 @@ void vp_client::do_run(uint64_t address, std::string start_breakpoint, std::stri
         strcpy(req.data+24+start_breakpoint.size(), end_breakpoint.c_str());
         strcpy(req.data+24+start_breakpoint.size()+end_breakpoint.size(), return_register.c_str());
 
-        vp_pipe_client->send_request(&req, &res);
+        // One retry in case of the VP crashed and was restarted (via on_child_exit).
+        if(!vp_pipe_client->send_request(&req, &res)){
+            LOG_MESSAGE(logger::INFO, "Resending!");
+            if(!vp_pipe_client->send_request(&req, &res)){
+                free(req.data);
+                afl_client::shutdown();
+            }
+        }
     EASY_END_BLOCK
 
     // Freeing req data.
@@ -307,7 +325,7 @@ void vp_client::get_return_code(){
         //Get exit status.
         req.request_command = testing::GET_RETURN_CODE;
         req.data_length = 0;
-        vp_pipe_client->send_request(&req, &res);
+        if(!vp_pipe_client->send_request(&req, &res)) afl_client::shutdown();
         m_ret_value = testing::testing_communication::bytes_to_int64(res.data, 0);
         LOG_MESSAGE(logger::INFO, "Run done. Return code: %d", m_ret_value);
     EASY_END_BLOCK
@@ -344,5 +362,4 @@ void vp_client::kill_vp(){
 uint64_t vp_client::get_return_code_value(){
     return m_ret_value;
 }
-
     
