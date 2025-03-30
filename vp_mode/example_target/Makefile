@@ -1,5 +1,3 @@
-#Command to run: "make" in ubuntu 22.04 with aarch64-none-elf-gcc installed
-
 SRCDIR           ?= $(dir $(firstword $(MAKEFILE_LIST)))
 
 O                ?= $(PWD)/build
@@ -8,15 +6,13 @@ P                ?= $(O)/install
 ITERATIONS 	     := 30000
 HAS_FLOAT        := 0
 CC               := aarch64-none-elf-gcc
-LD               := aarch64-none-elf-gcc
-CFLAGS           := -ffreestanding
-
-CFLAGS           += -O0
-
+CXX              := aarch64-none-elf-g++
+LD               := aarch64-none-elf-g++
 OBJCPY           := aarch64-none-elf-objcopy
-FLAGS_STR         = "$(CFLAGS)"
-CFLAGS           += -I./ -DFLAGS_STR=\"$(FLAGS_STR)\" -DITERATIONS=$(ITERATIONS) -DHAS_FLOAT=$(HAS_FLOAT)
+
+CFLAGS           := -ffreestanding -O0 -I./
 LFLAGS           := -nostartfiles -T link.ld -Wl,--build-id=none
+CXXFLAGS         := $(CFLAGS)
 
 PROGRAM          := $(O)/main.elf
 BIN_PROGRAM      := $(O)/main.bin
@@ -42,10 +38,10 @@ $(PROGRAM): $(OBJECTS)
 	$(S) $(LD) $(LFLAGS) -o $@ $^
 	$(S) $(OBJCPY) -O binary $(PROGRAM) $(BIN_PROGRAM)
 
-$(O)/%.o: %.c
+$(O)/%.o: %.cpp
 	$(S) echo -e "  CC\t$(notdir $@)"
 	$(S) mkdir -p $(dir $@)
-	$(S) $(CC) $(CFLAGS) -c -o $@ $<
+	$(S) $(CXX) $(CXXFLAGS) -c -o $@ $<
 
 $(O)/%.o: %.S
 	$(S) echo -e "  CC\t$(notdir $@)"
