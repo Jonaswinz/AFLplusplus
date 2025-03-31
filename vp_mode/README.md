@@ -1,31 +1,54 @@
 # Binary Fuzzing with a Virtual Platform (VP Mode)
 
-## 1) Introduction
-*TODO*
+This folder contains the vp-mode, another [binary-only](https://aflplus.plus/docs/binaryonly_fuzzing/) mode of AFL++. This mode allows to fuzz target software inside different Virtual Platforms (VPs). It utilizes the [VP-Testing-Interface](https://anonymous.4open.science/r/vp-testing-interface) to communicate with an arbitrary VP. 
+
+The current supported VPs are:
+- [AVP64](https://anonymous.4open.science/r/avp64-testing-interface/) (SystemC based ARMv8 64bit Virtual Platform)
+- [AVP32](https://anonymous.4open.science/r/avp32/) (Variant of AVP64 for 32bit)
+- [AVP32-STM32F0](https://anonymous.4open.science/r/avp32-STM32F0/) (Variant of AVP32 with models parts of the STM32F0 MCU)
+
+
+This folder contains the necessary code to run the harness. The harness is designed to interact with the AFL++ fuzzer and manage the VP process(es). <br />
+It reads the environmental variables specified in a bash script by the user and sends to the VP instances the necessary commands. <br />
+For example, it sends the specified MMIO addresses to track, the execution mode, and so on. See the table below for the complete list. <br />
+
+## 1) Fuzzing Workflow
+
+<img align="center" src="./assets/afl_workflow.drawio.png" alt="AFL++ workflow">
+
+In this project, we tried to keep the changes to the AFL++ fuzzer to a minimum. The workflow of the AFL++ remains intact: the main program that drives the fuzzing process is *afl-fuzz*. It picks a seed from the seed queue, performs a random mutation, generates an input, and feeds this input into a shared memory created at the very beginning of the program. AFL++ then forks and its child process executes the harness. <br /> AFL++ does an handshake with the harness to make sure the new process is behaving correctly, and then waits for the code coverage. The fuzzer creates a separate shared memory for the code coverage that it will read once the code execution ends. <br />
+The harness reads the environmental variables, forks, and creates the VP instances. It then passes through pipes the commands, and the shared memory ids the VP writes to and reads from.
 
 ---
 
 ## 2) Build VP Mode
 
-**_Recommended GCC version: 11.4.0_**
+*Recommended GCC version: 11.4.0*<br/>
+*Required OS: Linux*
 
-1. Clone this fork of the AFL++ repository.
+1. Download or clone this fork of the AFL++ repository.
 
-2. Modify the `VP_VERSION` file in the `vp_mode` folder to specify which VPs should be cloned and built.  
+2. Make AFL++
+   ```bash
+   cd ~/path/to/AFL++
+   make
+   ```
+
+3. Modify the `VP_VERSION` file in the `vp_mode` folder to specify which VPs should be cloned and built.  
    Some are already listed. Comment out lines with `#` to disable specific entries.
 
-3.  
+4.  
    **a)** VP mode (`-v`) is another `binary-only` mode of AFL++ and integrated into its build process.   Running `make distrib` or `make binary-only` will also build the vp-mode **unless** the `NO_VPMODE` environment variable is set.
 
    **b)** To build only the vp-mode (recommended), run:
 
    ```bash
    cd vp_mode
+   chmod 777 build_vp_support.sh
    ./build_vp_support.sh
    ```
 
-4. *(Optional)* After modifying any VP, rerun `./build_vp_support.sh` or run `make` in `vp_mode`,  
-   or `make install` in the specific VP directory inside `VPs`.
+4. *(Optional)* After modifying any VP, rerun `./build_vp_support.sh` or run `make` in the `vp_mode` folder,  or `make install` in the specific VP directory inside `VPs` folder.
 
 ---
 
@@ -66,12 +89,16 @@ To enable VP mode, use the `-v` parameter with `afl-fuzz`.
 ---
 
 ### Fuzzing Command
-To start the vp-mode AFL++ can be started like this:
+To start the vp-mode AFL++ can be started like this (from the AFL++ root directory):
 
 ```bash
-afl-fuzz -i <seeds_folder> -o <out_folder> -m none -v -- <path_to_target.cfg>
+cd ~/path/to/AFL++
+export H_PATH="$(pwd)/vp_mode/harness/build/harness"
+# ... (for all required ENVs)
+
+./afl-fuzz -i <seeds_folder> -o <out_folder> -m none -v -- <path_to_target.cfg>
 ```
-The `<path_to_target.cfg>` config file is passed to the VP, which contains the information what target software should be started.
+The `<path_to_target.cfg>` config file is passed to the VP, which contains the path to the target software that should be executed. Please take a look at the example.
 
 ---
 
@@ -80,6 +107,8 @@ The `<path_to_target.cfg>` config file is passed to the VP, which contains the i
 The `example_target` folder provides a complete fuzzing setup using AVP64. You can edit `Settings.bash` to modify harness behavior. Start the example with (from the repositories root):
 
 ```bash
+cd ~/path/to/AFL++
+chmod 777 ./vp_mode/example_target/run.bash
 ./vp_mode/example_target/run.bash
 ```
 
@@ -90,10 +119,24 @@ This script:
 
 ---
 
+### Modifing 
+
+You can change the harness settings, by updating the ENV inside the `Settings.bash`. Additionally you can also change the code of the `main.cpp`. After this you need to recompile the target software by simply:
+
+```bash
+cd ~/path/to/AFL++/vp_mode/example_target
+make
+```
+
+For this the `aarch64-none-elf` toolchain is required (download from [ARM Developer Page](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads) and add the bin folder to your PATH ENV).
+
+---
+
 ## 5) Troubleshooting
 
 - Enable harness and VP logging if fuzzing fails.
 - If start/end symbols aren't found, ensure they're not optimized away or renamed by C++ — use `extern "C"`.
 - For interrupts, remember: the interrupt triggers **before** the instruction is executed. After returning, the original instruction is executed.
 - In persistent mode, make sure the loop boundaries are safe to avoid stack overflows.
+- AVP32 and AVp32-STM32F0 need the initial stack pointer and program couter to be set in the .cfg file when using bare metal target software. These settings may need to be updated after recompiling.
 
