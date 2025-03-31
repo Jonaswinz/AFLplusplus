@@ -246,6 +246,7 @@ void afl_client::on_child_exit(int signum){
             if(instance->m_vp_clients[i]->vp_process == pid){
                 LOG_MESSAGE(logger::INFO, "Restarting process of instance %d", i);
                 instance->m_vp_clients[i]->restart_process(settings::fixed_reads.size(), settings::fixed_reads.data(), settings::interrupt_triggers.size(), settings::interrupt_triggers.data(), settings::error_symbol);
+                instance->m_vp_clients[i]->retry_run = true;
             }
         }
     }

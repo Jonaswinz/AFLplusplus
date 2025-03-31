@@ -36,6 +36,8 @@ class vp_client{
         // TODO getter.
         // PID of the VP child process.
         pid_t vp_process = -1;
+        
+        bool retry_run = false;
 
         vp_client(std::string vp_executable, int vp_loglevel, std::string vp_logging_path, std::string vp_launch_args, std::string target_path, uint64_t mmio_start_address, uint64_t mmio_end_address);
 

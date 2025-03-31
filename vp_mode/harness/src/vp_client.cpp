@@ -302,8 +302,14 @@ void vp_client::do_run(uint64_t address, std::string start_breakpoint, std::stri
 
         // One retry in case of the VP crashed and was restarted (via on_child_exit).
         if(!vp_pipe_client->send_request(&req, &res)){
-            LOG_MESSAGE(logger::INFO, "Resending!");
-            if(!vp_pipe_client->send_request(&req, &res)){
+            if(retry_run){
+                LOG_MESSAGE(logger::INFO, "Resending!");
+                if(!vp_pipe_client->send_request(&req, &res)){
+                    free(req.data);
+                    afl_client::shutdown();
+                }
+                retry_run = false;
+            }else{
                 free(req.data);
                 afl_client::shutdown();
             }
