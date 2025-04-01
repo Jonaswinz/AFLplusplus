@@ -242,6 +242,7 @@ void vp_client::setup(uint8_t fixed_read_count, fixed_read* fixed_reads, uint8_t
                     free(req.data);
                     afl_client::shutdown();
                 }
+                free(req.data);
             EASY_END_BLOCK
         }
     }
@@ -256,6 +257,7 @@ void vp_client::setup(uint8_t fixed_read_count, fixed_read* fixed_reads, uint8_t
                 free(req.data);
                 afl_client::shutdown();
             }
+            free(req.data);
         EASY_END_BLOCK
     }
 
