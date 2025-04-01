@@ -14,7 +14,7 @@ For example, it sends the specified MMIO addresses to track, the execution mode,
 
 ## 1) Fuzzing Workflow
 
-<img align="center" src="./assets/afl_workflow.drawio.png" alt="AFL++ workflow">
+<img align="center" src="https://raw.githubusercontent.com/Jonaswinz/AFLplusplus/refs/heads/vp-mode/vp_mode/assets/afl_workflow.drawio.png" alt="AFL++ workflow">
 
 In this project, we tried to keep the changes to the AFL++ fuzzer to a minimum. The workflow of the AFL++ remains intact: the main program that drives the fuzzing process is *afl-fuzz*. It picks a seed from the seed queue, performs a random mutation, generates an input, and feeds this input into a shared memory created at the very beginning of the program. AFL++ then forks and its child process executes the harness. <br /> AFL++ does an handshake with the harness to make sure the new process is behaving correctly, and then waits for the code coverage. The fuzzer creates a separate shared memory for the code coverage that it will read once the code execution ends. <br />
 The harness reads the environmental variables, forks, and creates the VP instances. It then passes through pipes the commands, and the shared memory ids the VP writes to and reads from.
