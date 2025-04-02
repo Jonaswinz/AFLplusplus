@@ -1,11 +1,11 @@
 # Binary Fuzzing with a Virtual Platform (VP Mode)
 
-This folder contains the vp-mode, another [binary-only](https://aflplus.plus/docs/binaryonly_fuzzing/) mode of AFL++. This mode allows to fuzz target software inside different Virtual Platforms (VPs). It utilizes the [VP-Testing-Interface](https://anonymous.4open.science/r/vp-testing-interface) to communicate with an arbitrary VP. 
+This folder contains the vp-mode, another [binary-only](https://aflplus.plus/docs/binaryonly_fuzzing/) mode of AFL++. This mode allows to fuzz target software inside different Virtual Platforms (VPs). It utilizes the [VP-Testing-Interface](https://github.com/Jonaswinz/vp-testing-interface) to communicate with an arbitrary VP. 
 
 The current supported VPs are:
-- [AVP64](https://anonymous.4open.science/r/avp64-testing-interface/) (SystemC based ARMv8 64bit Virtual Platform)
-- [AVP32](https://anonymous.4open.science/r/avp32/) (Variant of AVP64 for 32bit)
-- [AVP32-STM32F0](https://anonymous.4open.science/r/avp32-STM32F0/) (Variant of AVP32 with models parts of the STM32F0 MCU)
+- [AVP64](https://github.com/Jonaswinz/avp64/) (SystemC based ARMv8 64bit Virtual Platform)
+- [AVP32](https://github.com/Jonaswinz/avp64/tree/avp32) (Variant of AVP64 for 32bit)
+- [AVP32-STM32F0](https://github.com/Jonaswinz/avp64/tree/avp32-STM32F0) (Variant of AVP32 with models parts of the STM32F0 MCU)
 
 
 This folder contains the necessary code to run the harness. The harness is designed to interact with the AFL++ fuzzer and manage the VP process(es). <br />

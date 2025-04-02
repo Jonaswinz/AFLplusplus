@@ -1,8 +1,8 @@
 > [!NOTE]  
 > This fork integrates AFL++ with a harness that connects the fuzzer with SystemC-based simulators.
 >
-> For more information on this, go to the [vp_mode folder](https://anonymous.4open.science/r/AFLplusplus-vp-mode/vp_mode/README.md) of this AFL++ project.
-> We tested the harness with three simulators, the proprietary SIM-A, the open source [AVP64](https://anonymous.4open.science/r/avp64-testing-interface/) and the open source [AVP32](https://anonymous.4open.science/r/avp32).
+> For more information on this, go to the [vp_mode folder](vp_mode/README.md) of this AFL++ project.
+> We tested the harness with three simulators, the proprietary SIM-A, the open source [AVP64](https://github.com/Jonaswinz/avp64) and the open source [AVP32](https://github.com/Jonaswinz/avp64/tree/avp32).
 
 # American Fuzzy Lop plus plus (AFL++)
 
